@@ -1,0 +1,11 @@
+{
+    "name": "Starstate.Ui",
+    "rootNamespace": "Starstate.Ui",
+    "references": [
+        "Starstate.Core",
+        "UnityEngine.UI",
+        "UnityEngine.UnityWebRequestModule",
+        "UnityEngine.UnityWebRequestAudioModule",
+        "UnityEngine.AudioModule"
+    ]
+}

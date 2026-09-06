@@ -1,0 +1,663 @@
+using System;
+using System.Collections;
+using System.IO;
+using Starstate.Core;
+using UnityEngine;
+
+namespace Starstate.Ui
+{
+    /// <summary>
+    /// 组合根：菜单 → 主循环 → 自动存档；大模型增强层接线（NPC 交谈 / AI 日常小事件）。
+    /// LLM 只增强文本：不可用/关闭时全部走原逻辑（内置台词池、原随机事件）。
+    /// </summary>
+    public class GameApp : MonoBehaviour
+    {
+        public UiRoot ui;
+
+        private GameState st;
+        private string tab = "状态";
+        private string lastKind = "";
+        private const int SaveVersion = 4;   // v4：Phase 4 叙事引擎（marks/回响/时钟/周计划/竞争者）
+        private const string FontScaleKey = "starstate_font_scale";
+        private const string LlmKey = "starstate_llm_cfg2";   // v2：默认挂载 RP-LoRA（2026-09-06 作者选定）
+
+        // —— LLM ——
+        private LlmConfig llm;
+        private bool llmReady;          // 服务可用（本地已就绪 / 远程默认按可用处理）
+        private bool llmChecking;
+        private bool microBusy;
+
+        // —— NPC 交谈状态机 ——
+        private string talkNpc;
+        private string talkStage;       // loading / choose / result
+        private NpcTalkDto talkDto;
+        private bool talkBusy;
+        private int talkSession;        // 交谈会话号：关闭弹层后作废在途响应
+
+        private readonly System.Random uiRng = new System.Random();
+
+        private static string SavePath
+        {
+            get { return Path.Combine(Application.persistentDataPath, "starstate_save.json"); }
+        }
+
+        public void Init(UiRoot root)
+        {
+            ui = root;
+            ui.OnOptionChosen += Choose;
+            ui.OnPlanAdjusted += PlanAdjusted;
+            ui.OnTabSwitched += t => { tab = t; RenderSide(); };
+            ui.OnNewGame += StartNew;
+            ui.OnContinue += ContinueSave;
+            ui.OnQuit += Quit;
+            ui.OnFastForward += FastForward;
+            ui.OnOpenSettings += () => ui.ShowSettings();
+            ui.OnFontScaleChanged += SetFontScale;
+            ui.OnResetSave += ResetSave;
+            ui.OnNpcTalk += StartTalk;
+            ui.OnTalkOption += TalkOption;
+            ui.OnTalkClose += CloseTalk;
+            ui.OnLlmApplied += OnLlmApplied;
+            ui.OnLlmTest += TestLlm;
+
+            llm = LoadLlm();
+            ui.SetLlmConfig(llm);
+            if (llm.mode == "remote") llmReady = true;
+            if (llm.enabled && llm.mode == "local" && llm.autoStart) KickServer("正在启动本地模型服务…");
+            UpdateAiBadge();
+            ui.ShowMenu(CoreStateHasSave());
+        }
+
+        private void OnDestroy()
+        {
+            FlushSaveSync();   // 退出前兜底同步落盘（异步写可能在途）
+            LlamaServer.Kill();
+        }
+
+        // ---------------- LLM 接入 ----------------
+
+        private static LlmConfig LoadLlm()
+        {
+            try
+            {
+                string s = PlayerPrefs.GetString(LlmKey, "");
+                if (!string.IsNullOrEmpty(s)) return JsonUtility.FromJson<LlmConfig>(s) ?? new LlmConfig();
+            }
+            catch { /* 配置损坏则用默认 */ }
+            return new LlmConfig();
+        }
+
+        private void SaveLlm()
+        {
+            try
+            {
+                PlayerPrefs.SetString(LlmKey, JsonUtility.ToJson(llm));
+                PlayerPrefs.Save();
+            }
+            catch { /* ignore */ }
+        }
+
+        private void OnLlmApplied()
+        {
+            SaveLlm();
+            ui.SetLlmConfig(llm);
+            UpdateAiBadge();
+            if (llm.enabled && llm.mode == "local" && llm.autoStart && !LlamaServer.Running && !llmChecking)
+                KickServer("正在启动本地模型服务…");
+        }
+
+        private void UpdateAiBadge()
+        {
+            if (llm == null || !llm.enabled) { ui.SetAiBadge(""); return; }
+            if (llmChecking) ui.SetAiBadge("AI 唤醒中…");
+            else if (llmReady) ui.SetAiBadge("AI 就绪");
+            else ui.SetAiBadge("AI 未连接");
+        }
+
+        private void KickServer(string initial)
+        {
+            llmChecking = true;
+            UpdateAiBadge();
+            ui.ShowLlmStatus(initial);
+            StartCoroutine(LlamaServer.EnsureRunning(llm, s => ui.ShowLlmStatus(s), ok =>
+            {
+                llmChecking = false;
+                llmReady = ok;
+                UpdateAiBadge();
+                if (ok && st != null) RenderSide(); // 人物页签等不受影响，仅刷新状态
+            }));
+        }
+
+        private void TestLlm()
+        {
+            ui.ShowLlmStatus("测试连接中…");
+            if (llm.enabled && llm.mode == "local")
+            {
+                StartCoroutine(TestFlow());
+                return;
+            }
+            StartCoroutine(TestChat());
+        }
+
+        private IEnumerator TestFlow()
+        {
+            if (!LlamaServer.Running)
+            {
+                bool ok = false, settled = false;
+                yield return LlamaServer.EnsureRunning(llm, s => ui.ShowLlmStatus(s), r => { ok = r; settled = true; });
+                while (!settled) yield return null;
+                llmReady = ok;
+                if (!ok) { ui.ShowLlmStatus("✗ 本地服务未能就绪（见上方提示）。"); yield break; }
+            }
+            yield return TestChat();
+        }
+
+        private IEnumerator TestChat()
+        {
+            yield return LlmClient.Chat(llm, new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = "连通性测试。请只输出：{\"ok\":1}" },
+            }, 24,
+            ok => ui.ShowLlmStatus("✓ 连接成功，模型已响应。AI 增强可用。"),
+            err => ui.ShowLlmStatus("✗ " + err));
+        }
+
+        private IEnumerator ChatOnce(ChatMsg[] msgs, int maxTokens, Action<string> ok, Action<string> err, Func<bool> cancelled = null)
+        {
+            yield return LlmClient.Chat(llm, msgs, maxTokens, ok, err, cancelled);
+        }
+
+        // ---------------- NPC 交谈 ----------------
+
+        private void StartTalk(string npcId)
+        {
+            if (st == null || talkBusy) return;
+            talkBusy = true;
+            talkNpc = npcId;
+            talkStage = "loading";
+            talkSession++;
+            int session = talkSession;
+            ui.ShowTalk(Npcs.Name(npcId));
+            Npcs.Ensure(st);
+
+            if (!llm.enabled)
+            {
+                FinishTalk(ContentNpcTalk.FallbackTalk(st, npcId), null, session);
+                return;
+            }
+            if (llm.mode == "remote" || llmReady)
+            {
+                ui.ShowTalkStatus("正在请求 AI……");
+                RunTalkGeneration(npcId, session);
+                return;
+            }
+            // 本地未就绪：现场唤醒（而不是静默退回内置台词）
+            ui.ShowTalkStatus("正在唤醒本地模型（首次约需一两分钟）……");
+            StartCoroutine(WakeThenTalk(npcId, session));
+        }
+
+        private IEnumerator WakeThenTalk(string npcId, int session)
+        {
+            bool ok = false, settled = false;
+            yield return LlamaServer.EnsureRunning(llm, s => { if (session == talkSession) ui.ShowTalkStatus(s); },
+                r => { ok = r; settled = true; });
+            while (!settled) yield return null;
+            llmChecking = false;
+            llmReady = ok;
+            UpdateAiBadge();
+            if (session != talkSession) yield break;   // 弹层已被关闭
+            if (!ok)
+            {
+                FinishTalk(ContentNpcTalk.FallbackTalk(st, npcId), "AI 唤醒失败，本次使用内置台词（可在设置中测试连接）。", session);
+                yield break;
+            }
+            RunTalkGeneration(npcId, session);
+        }
+
+        private void RunTalkGeneration(string npcId, int session)
+        {
+            Func<bool> cancelled = () => session != talkSession;   // 弹层关闭即中止在途请求
+            StartCoroutine(ChatOnce(new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.NpcTalkUser(st, npcId) },
+            }, 460,
+            content =>
+            {
+                if (session != talkSession) return;    // 弹层已关闭，丢弃在途响应
+                var dto = LlmJson.ParseTalk(content);
+                if (dto == null)
+                    FinishTalk(ContentNpcTalk.FallbackTalk(st, npcId), "AI 返回内容无法解析，本次使用内置台词。", session);
+                else
+                    FinishTalk(dto, null, session);
+            },
+            e =>
+            {
+                if (session != talkSession) return;
+                FinishTalk(ContentNpcTalk.FallbackTalk(st, npcId), "AI 未接入：" + e + "（使用内置台词）", session);
+            }, cancelled));
+        }
+
+        private void FinishTalk(NpcTalkDto dto, string statusNote, int session)
+        {
+            if (session != talkSession || talkStage != "loading") return;
+            talkDto = dto;
+            talkStage = "choose";
+            talkBusy = false;
+            if (statusNote == null) ui.HideTalkStatus();
+            else ui.ShowTalkStatus(statusNote);
+            ui.AddTalkPara(dto.greeting);
+            if (dto.lines != null)
+                foreach (var l in dto.lines)
+                    if (!string.IsNullOrEmpty(l)) ui.AddTalkPara(l);
+            var labels = new string[dto.options.Length];
+            for (int i = 0; i < dto.options.Length; i++) labels[i] = dto.options[i].label;
+            ui.SetTalkOptions(labels);
+        }
+
+        private void TalkOption(int idx)
+        {
+            if (talkStage == "choose" && talkDto != null)
+            {
+                var opt = talkDto.options[Math.Max(0, Math.Min(talkDto.options.Length - 1, idx))];
+                string summary = LlmGameplay.ApplyTalk(st, talkNpc, opt);
+                Save();
+                ui.AddTalkPara("你：" + opt.label);
+                ui.AddTalkPara(Npcs.Name(talkNpc) + "：" + (string.IsNullOrEmpty(opt.reply) ? "……" : opt.reply));
+                ui.AddTalkPara("（" + summary + "）");
+                ui.SetTalkOptions(new[] { "再聊一句", "告 辞" });
+                talkStage = "result";
+                RenderSide(); // 关系数值即时刷新
+                return;
+            }
+            if (talkStage == "result")
+            {
+                if (idx == 0) { StartTalk(talkNpc); return; }
+                CloseTalk();
+                return;
+            }
+            CloseTalk();
+        }
+
+        private void CloseTalk()
+        {
+            talkSession++;             // 作废所有在途响应
+            ui.HideTalk();
+            talkStage = null;
+            talkBusy = false;
+        }
+
+        // ---------------- AI 日常小事件（点缀普通"day"，白名单效果） ----------------
+
+        private void MaybeMicro(Scene scene)
+        {
+            if (llm == null || !llm.enabled || !llmReady || microBusy) return;
+            if (st == null || st.phase != Phase.Day || st.hasPending) return;
+            if (scene.kind != "day") return;                                  // 只点缀普通日常
+            if (st.lastAiMicro == st.date) return;                            // 每日最多一次
+            if (st.queue.Count > 0 || st.runtimeEvent == null
+                || st.runtimeEvent.id != "_generic_day") return;              // 只替换伪事件
+            st.lastAiMicro = st.date;                                         // 先占位，失败也不重试
+            if (uiRng.NextDouble() > 0.45) { Save(); return; }
+            microBusy = true;
+            StartCoroutine(ChatOnce(new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.MicroUser(st) },
+            }, 460,
+            content =>
+            {
+                microBusy = false;
+                var ev = LlmGameplay.BuildMicroEvent(st, LlmJson.ParseMicro(content));
+                if (ev != null && st.phase == Phase.Day && !st.hasPending
+                    && st.runtimeEvent != null && st.runtimeEvent.id == "_generic_day"
+                    && st.queue.Count == 0)
+                {
+                    st.runtimeEvent = ev;
+                    Save();
+                    RenderAll();
+                }
+            },
+            e => { microBusy = false; }));
+        }
+
+        // ---------------- 菜单与主循环 ----------------
+
+        private static float GetFontScale()
+        {
+            return PlayerPrefs.GetFloat(FontScaleKey, 1f);
+        }
+
+        private void SetFontScale(float s)
+        {
+            PlayerPrefs.SetFloat(FontScaleKey, s);
+            PlayerPrefs.Save();
+            ui.Build(GameBootstrap.MakeFont(), GameBootstrap.MakeDocFont(), s);   // 重建界面以应用字号（事件订阅保留在 UiRoot 实例上）
+            ui.SetLlmConfig(llm);
+            UpdateAiBadge();
+            ui.HideOverlays();
+            if (st != null) RenderAll(); else ui.ShowMenu(CoreStateHasSave());
+        }
+
+        private void ResetSave()
+        {
+            try { if (File.Exists(SavePath)) File.Delete(SavePath); } catch { /* ignore */ }
+            st = null;
+            ui.SetSettingsHint("存档已重置。点击“返回”回到主菜单。");
+            ui.ShowMenu(false);
+        }
+
+        private static bool CoreStateHasSave() => File.Exists(SavePath);
+
+        private void StartNew()
+        {
+            st = State.NewGame(ui.NameInput());
+            st.saveVersion = SaveVersion;
+            Flow.Begin(st);
+            Save();
+            ui.HideOverlays();
+            RenderAll();
+            ui.ShowTutorial();   // 新局自动播放新手引导（主菜单也可重看）
+        }
+
+        private void ContinueSave()
+        {
+            st = Load();
+            if (st == null || st.saveVersion != SaveVersion)
+            {
+                // 旧版本存档不兼容（存档结构已升级），留痕后开新局
+                ui.SetMenuHint("检测到旧版本存档（格式已升级到 v4），无法继续——已为你开始新的一局。");
+                st = State.NewGame(ui.NameInput());
+                st.saveVersion = SaveVersion;
+                Flow.Begin(st);
+                Save();
+                ui.HideOverlays();
+                RenderAll();
+                return;
+            }
+            Npcs.Ensure(st);
+            ui.HideOverlays();
+            RenderAll();
+        }
+
+        private void Choose(int idx)
+        {
+            if (st == null) return;
+            if (lastKind == "ending")
+            {
+                if (idx == 0) { StartNew(); return; }
+                Quit();
+                return;
+            }
+            bool wasWeekEnd = st.phase == Phase.WeekEnd;
+            Flow.Choose(st, idx);
+            Save();
+            RenderAll();
+            if (wasWeekEnd && llm != null && llm.enabled && llmReady && !microBusy)
+                StartCoroutine(RequestWeeklyReview());
+        }
+
+        /// <summary>AI 科长周评：周五点评后追加一段引用本周真实事件的评语（失败静默）。</summary>
+        private IEnumerator RequestWeeklyReview()
+        {
+            microBusy = true;
+            yield return ChatOnce(new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.WeekReviewUser(st) },
+            }, 140,
+            content =>
+            {
+                microBusy = false;
+                string text = StripPlain(content);
+                if (!string.IsNullOrEmpty(text) && st != null && st.hasPending)
+                    ui.AppendBodyPara("周衡之合上记录本，补了一句：" + text);
+            },
+            e => { microBusy = false; });
+        }
+
+        /// <summary>剥离代码块围栏与首尾引号，压缩空白（纯文本回复用）。</summary>
+        private static string StripPlain(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            s = s.Replace("```", "\n");
+            var lines = s.Split('\n');
+            var keep = new System.Collections.Generic.List<string>();
+            foreach (var l in lines)
+            {
+                var t = l.Trim().Trim('"');
+                if (!string.IsNullOrEmpty(t) && !t.StartsWith("{") && !t.StartsWith("}")) keep.Add(t);
+            }
+            var joined = string.Join(" ", keep.ToArray());
+            return joined.Length > 90 ? joined.Substring(0, 90) : joined;
+        }
+
+        /// <summary>周计划编辑器：±槽位——只做局部数值刷新，不重建整树（无闪烁、无 GC 尖峰）。</summary>
+        private void PlanAdjusted(int slot, int delta)
+        {
+            if (st == null) return;
+            Flow.AdjustPlan(st, slot, delta);
+            Save();
+            ui.UpdatePlanEditor(new[] { st.plan.work, st.plan.study, st.plan.social, st.plan.family, st.plan.rest });
+        }
+
+        private void FastForward()
+        {
+            if (st == null || lastKind == "ending") return;
+            // 结果页与结构阶段（周计划/周点评/周末/月结）：推进＝选默认项
+            if (st.hasPending)
+            {
+                Flow.Choose(st, 0);
+                Save();
+                RenderAll();
+                return;
+            }
+            switch (st.phase)
+            {
+                case Phase.WeekPlan:
+                case Phase.WeekEnd:
+                case Phase.Weekend:
+                case Phase.MonthEnd:
+                    Flow.Choose(st, 0);
+                    Save();
+                    RenderAll();
+                    return;
+            }
+            if (st.phase != Phase.Day) return; // 序章事件含关键抉择，不代选
+            // 屏上是日常/岗位任务：选默认项（与快进内部行为一致，一步一停）
+            if (st.runtimeEvent != null &&
+                (st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task"))
+            {
+                Flow.Choose(st, 0);
+                Save();
+                RenderAll();
+                return;
+            }
+            // 其余情况（剧情/动态抉择事件）引擎护栏会拒绝——按钮此时应已置灰
+            Flow.FastForward(st);
+            Save();
+            RenderAll();
+        }
+
+        private void RenderAll()
+        {
+            ui.RenderTop(st);
+            var scene = Flow.CurrentScene(st);
+            lastKind = scene.kind;
+            ui.RenderMain(scene);
+            RenderSide();
+            MaybeMicro(scene);
+            UpdateFfButton();
+        }
+
+        /// <summary>推进按钮可用性：结果页/结构阶段/日常可推进；剧情与动态抉择事件必须玩家亲自选。</summary>
+        private void UpdateFfButton()
+        {
+            bool ok = st != null && lastKind != "ending";
+            if (ok && !st.hasPending)
+            {
+                switch (st.phase)
+                {
+                    case Phase.WeekPlan:
+                    case Phase.WeekEnd:
+                    case Phase.Weekend:
+                    case Phase.MonthEnd:
+                        break;
+                    case Phase.Day:
+                        ok = string.IsNullOrEmpty(st.currentEvent) &&
+                             (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
+                        break;
+                    default:
+                        ok = false; // 序章抉择
+                        break;
+                }
+            }
+            ui.SetFfEnabled(ok);
+        }
+
+        private void RenderSide()
+        {
+            ui.RenderSide(tab, st);
+        }
+
+        private void Quit()
+        {
+            LlamaServer.Kill();
+            var editorType = FindType("UnityEditor.EditorApplication");
+            if (editorType != null)
+            {
+                var prop = editorType.GetProperty("isPlaying");
+                if (prop != null && prop.CanWrite) prop.SetValue(null, false);
+                return;
+            }
+            Application.Quit();
+        }
+
+        private static System.Type FindType(string fullName)
+        {
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { var t = asm.GetType(fullName); if (t != null) return t; }
+                catch { /* ignore */ }
+            }
+            return null;
+        }
+
+        // ---------------- 存档（异步 + 原子替换；主线程序列化，后台线程落盘） ----------------
+
+        private static readonly object SaveLock = new object();
+
+        private void Save()
+        {
+            if (st == null) return;
+            st.saveVersion = SaveVersion;
+            string json = JsonUtility.ToJson(st);   // 紧凑格式：比 pretty 更快、文件更小
+            if (string.IsNullOrEmpty(json) || json.Length < 16) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => WriteSaveAtomic(json));
+        }
+
+        private static void WriteSaveAtomic(string json)
+        {
+            if (string.IsNullOrEmpty(json) || json.Length < 16) return;
+            lock (SaveLock)
+            {
+                try
+                {
+                    string tmp = SavePath + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    if (new FileInfo(tmp).Length < 16) return;   // 落盘校验
+                    if (File.Exists(SavePath)) File.Replace(tmp, SavePath, null);
+                    else File.Move(tmp, SavePath);
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning("[STARSTATE] 存档失败：" + e.Message);
+                }
+            }
+        }
+
+        /// <summary>退出/销毁时同步兜底：确保最后一次状态落盘。</summary>
+        private void FlushSaveSync()
+        {
+            if (st == null) return;
+            try { st.saveVersion = SaveVersion; WriteSaveAtomic(JsonUtility.ToJson(st)); }
+            catch { /* 兜底失败不阻断退出 */ }
+        }
+
+        private GameState Load()
+        {
+            try
+            {
+                string raw = File.ReadAllText(SavePath);
+                // 上古存档没有 saveVersion 字段，JsonUtility 会用字段默认值顶替版本门槛——直接判不兼容
+                if (!raw.Contains("\"saveVersion\"")) return null;
+                return JsonUtility.FromJson<GameState>(raw);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[STARSTATE] 读档失败：" + e.Message);
+                return null;
+            }
+        }
+    }
+
+    /// <summary>场景引导：Awake 中构建 UI 与应用。另用运行时自举，Boot 场景无需挂任何脚本（防场景脚本引用剥落）。</summary>
+    public class GameBootstrap : MonoBehaviour
+    {
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+        private static void AutoBootstrap()
+        {
+            if (UnityEngine.Object.FindObjectOfType<GameBootstrap>() != null) return;
+            var go = new GameObject("GameBootstrap");
+            go.AddComponent<GameBootstrap>();
+        }
+
+        private void Awake()
+        {
+            var ui = gameObject.AddComponent<UiRoot>();
+            var app = gameObject.AddComponent<GameApp>();
+            float scale = PlayerPrefs.GetFloat("starstate_font_scale", 1f);
+            ui.Build(MakeFont(), MakeDocFont(), scale);
+            app.Init(ui);
+        }
+
+        private static Font _uiFont, _docFont;
+
+        /// <summary>OS 中文字体（微软雅黑→黑体→宋体→内置字体兜底）。静态缓存：字号切换重建 UI 时不重复创建/泄漏 Font。</summary>
+        public static Font MakeFont()
+        {
+            if (_uiFont != null) return _uiFont;
+            string[] candidates = { "Microsoft YaHei", "微软雅黑", "SimHei", "SimSun" };
+            foreach (var name in candidates)
+            {
+                try
+                {
+                    var f = Font.CreateDynamicFontFromOSFont(name, 17);
+                    if (f != null) { _uiFont = f; return f; }
+                }
+                catch { /* 继续尝试 */ }
+            }
+            _uiFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            return _uiFont;
+        }
+
+        /// <summary>公文正文字体（仿宋→楷体，回退 UI 字体）——红头文件/剪报/印章的字体语汇。</summary>
+        public static Font MakeDocFont()
+        {
+            if (_docFont != null) return _docFont;
+            string[] candidates = { "FangSong", "仿宋", "FangSong_GB2312", "仿宋_GB2312", "KaiTi", "楷体" };
+            foreach (var name in candidates)
+            {
+                try
+                {
+                    var f = Font.CreateDynamicFontFromOSFont(name, 17);
+                    if (f != null) { _docFont = f; return f; }
+                }
+                catch { /* 继续尝试 */ }
+            }
+            _docFont = MakeFont();
+            return _docFont;
+        }
+    }
+}

@@ -1,0 +1,5 @@
+{
+    "name": "Starstate.Core",
+    "rootNamespace": "Starstate.Core",
+    "noEngineReferences": true
+}

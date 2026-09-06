@@ -1,0 +1,26 @@
+# ===== Unity（game/ 工程目录）=====
+game/Library/
+game/Temp/
+game/Logs/
+game/UserSettings/
+game/obj/
+game/*.csproj
+game/*.sln
+*.user
+*.pidb
+*.booproj
+*.svd
+
+# ===== 测试与临时产物 =====
+tmpbuild/
+.tmpbuild/
+*.log
+*.tmp
+
+# ===== 本地会话/工具状态 =====
+.zcode/
+.crash/
+
+# ===== 系统 =====
+Thumbs.db
+Desktop.ini

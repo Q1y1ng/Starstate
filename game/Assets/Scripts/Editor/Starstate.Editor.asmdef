@@ -1,0 +1,11 @@
+{
+    "name": "Starstate.Editor",
+    "rootNamespace": "Starstate.EditorTools",
+    "references": [
+        "Starstate.Core",
+        "Starstate.Ui"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ]
+}
