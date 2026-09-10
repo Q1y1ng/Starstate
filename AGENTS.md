@@ -19,6 +19,7 @@
 | Phase 2 | 基础构建：核心系统＋序章＋2026年9月切片（M0） | ✅ 完成 |
 | Phase 3 | 十年完整版：晋升/考核/路线/结局/快进＋十年内容＋新闻栏＋大模型增强层 | ✅ 收口（EditMode 12/12 全绿，含九个补丁，见 changelog/PHASE-3.md 总览） |
 | Phase 4 | 从"事件轮播"到"活的人生"：回响引擎＋周计划＋档案公文美学＋内容大填充 | ✅ 完成（EditMode 17/17 全绿，见 changelog/PHASE-4.md） |
+| Phase 5 | 市长办公桌：七品开局＋卷宗签批＋两把尺＋Papers Please 压力（v0.2 Preview） | 🔶 M0＋v0.2.x 完成（EditMode 37/37 全绿，见 changelog/PHASE-5.md） |
 
 **技术栈**：Unity 2022.3.57f1c2（本机编辑器，升级路径 Unity 6 LTS）+ C#。模拟核心（`Core/`）为纯 C#、不依赖 UnityEngine，保证可测试可迁移；UGUI 由代码构建；中文渲染用 OS 字体。另有**大模型增强层**（本地 llama-server 或 OpenAI 兼容 API：NPC 交谈＋AI 日常小事件，效果白名单制、可整体关闭，详见 changelog/PHASE-3.md 补丁四）。详见 [docs/PHASE3-DESIGN.md](docs/PHASE3-DESIGN.md)。
 
@@ -26,7 +27,7 @@
 - **Boot 场景不挂任何脚本**：GameBootstrap 由 `[RuntimeInitializeOnLoadMethod]` 运行时自举；场景报 missing script 时用菜单 STARSTATE/创建 Boot 场景 重建（重建只生成摄像机）
 - 开发历程：见 `changelog/`（每 Phase 一个文件，倒序记录）
 
-当前玩法：**政府职业成长·十年完整版＋Phase 4 叙事升级**——2026-2036，科员→副科→正科→（转官）→十品副处。每周一做**精力周计划**（岗位/学习/人际/家庭/休整五槽位）；任务分**五种决策骨架**（例行/限时/协作/风险/露脸）；选择经 **marks＋回响系统**在数周至数年后兑现（16 个原死 flag 全部接线），另有数据造假案、房子、家庭、辞职诱惑等剧情链＋**中途辞职结局**；月度十二节律＋开局志向（做事/晋升/安稳/搞钱）＋结局个人史。UI 为**档案公文美学**（红头文件/朱砂印章/报纸剪报/干部履历卡/台历/程序纸纹与音效/仿宋＋雅黑双字体，零美术资产全程序生成）。时间快进按玩家计划自动推进、剧情/回响/时钟节点必停。设计文档：docs/PHASE4-DESIGN.md；存档 saveVersion 4（旧档由 GameApp 引导重开）。
+当前玩法：**Phase 5 · 市长办公桌（v0.2 Preview）**——七品·大同市市长沈砚舟（41 岁，2026-09 就任），卷宗签批回合制（翻页→核对→照准/退回/请示/会签/压下/特事特办），两把尺（合规×效率）进年度考核；常委会权力地形；序章三幕；周计划五槽（签批/调研/会商/关系/家庭）。UI：木纹桌面＋台灯晕＋红头文件＋朱砂「签批」章（零美术资产）。存档 saveVersion 5。Phase 1–4 科员十年线仍在仓库（吏轨 API 留桩，内容待迁）。规格：docs/compose/spec/papers-desk-overhaul.md；changelog/PHASE-5.md。
 
 ## 3. 世界观资料（唯一事实来源）
 

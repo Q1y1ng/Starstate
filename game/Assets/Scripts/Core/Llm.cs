@@ -78,8 +78,8 @@ namespace Starstate.Core
             sb.Append("你是人生模拟游戏《STARSTATE》的中文叙事引擎。世界观要点：架空王朝“中华帝国”，");
             sb.Append("1700年太祖建国，制度化贤能帝制；官员分官（十品）与吏（三等）两轨；市级行政机关命名“局”；");
             sb.Append("机关内部没有政党；2026年处于AI时代，《AI治理法》确立“算法可以提供意见，不得代替法定权力主体作出最终政治决定”。");
-            sb.Append("玩家是长安市发展和改革局综合科的年轻公务员。\n");
-            sb.Append("文风：克制、写实、有机关生活质感；称呼自然；禁止口号腔、禁止出戏的网络梗。\n");
+            sb.Append("玩家是大同市人民政府市长（七品·正厅），常委会副主席，每天在办公桌前签批卷宗。\n");
+            sb.Append("文风：克制、写实、有机关与公文质感；称呼自然；禁止口号腔、禁止出戏的网络梗。\n");
             sb.Append("硬性要求：只输出一个 JSON 对象，不要代码块标记，不要任何解释文字；JSON 语法符号只用半角双引号，字段名严格按给定的 schema，不要发明新字段，不要在文本中提及任何数值或点数。");
             sb.Append("若用户任务标注【纯文本】，则只输出纯文本本身，不要 JSON、不要代码块。");
             return sb.ToString();
@@ -109,30 +109,41 @@ namespace Starstate.Core
             var d = GameClock.Parse(st.date);
             string social = ContentRegistry.Years.ContainsKey(d.Year) ? ContentRegistry.Years[d.Year].social : "";
             var sb = new StringBuilder();
-            sb.Append($"【日期】{GameClock.FmtFull(d)}；玩家：{st.player.name}，{st.grade}，{st.player.post}；精力{st.player.energy}，压力{st.player.stress}。\n");
+            sb.Append($"【日期】{GameClock.FmtFull(d)}；玩家：{st.player.name}，{st.grade}，大同市人民政府{st.player.post}；精力{st.player.energy}，压力{st.player.stress}；合规{st.compliance}，效率{st.efficiency}。\n");
             if (!string.IsNullOrEmpty(social)) sb.Append($"【当月城市背景】{social}\n");
-            sb.Append("【任务】写一件今天发生在机关里的不起眼的小事（一份材料、一个电话、一场雨、一次排队、一句闲话……），不要戏剧化，不要涉及人事任免。\n");
+            sb.Append("【任务】写一件今天发生在市政府办公桌上的不起眼小事（一份材料、一个电话、一场雨、一次排队、一句闲话……），不要戏剧化，不要涉及省管干部任免。\n");
             sb.Append("输出 JSON：{\"title\":\"标题（不超过10字）\",\"paras\":[\"第一段（不超过90字）\",\"第二段（不超过80字）\"],\"options\":[{\"label\":\"玩家选择（不超过10字）\",\"mood\":\"good或tough或neutral\",\"result\":\"结果一句话（不超过40字）\"},{\"label\":\"…\",\"mood\":\"…\",\"result\":\"…\"}]}。options 恰好2个。");
             return sb.ToString();
         }
 
-        /// <summary>周五例会 AI 科长周评：引用本周真实计划、任务与事件（纯文本回复）。</summary>
+        /// <summary>周五例会 AI 周评：引用本周真实计划、卷宗与事件（纯文本回复）。</summary>
         public static string WeekReviewUser(GameState st)
         {
             var sb = new StringBuilder();
             var d = GameClock.Parse(st.date);
-            sb.Append($"【本周】{d.Year}年第{st.week.index}周；玩家：{st.player.name}，{st.grade}。【纯文本】\n");
-            sb.Append($"【周计划】岗位{st.plan.work} 学习{st.plan.study} 人际{st.plan.social} 家庭{st.plan.family} 休整{st.plan.rest}（精力分配）。\n");
-            sb.Append(st.weekEndData != null ? $"【本周任务】{st.week.tasks.Count} 项，综合评级 {st.weekEndData.avgGrade}。\n" : $"【本周任务】{st.week.tasks.Count} 项。\n");
+            sb.Append($"【本周】{d.Year}年第{st.week.index}周；玩家：{st.player.name}，{st.grade}，大同市市长。【纯文本】\n");
+            sb.Append($"【周计划】签批{st.plan.work} 调研{st.plan.study} 会商{st.plan.social} 关系{st.plan.family} 休整{st.plan.rest}（精力分配）。\n");
+            int pending = st.pendingDossierIds.Count + (st.activeDossier != null && !st.activeDossier.resolved ? 1 : 0);
+            sb.Append($"【案头】待办卷宗{pending}件；合规{st.compliance} 效率{st.efficiency}；本周程序问题{st.yearIntegrity}。\n");
+            if (st.dossierLog != null && st.dossierLog.Count > 0)
+            {
+                int n = 0;
+                for (int i = st.dossierLog.Count - 1; i >= 0 && n < 3; i--)
+                {
+                    var e = st.dossierLog[i];
+                    sb.Append($"【本周卷宗】{e.date} {e.disposition}：{e.title}（漏查{e.issuesMissed}）\n");
+                    n++;
+                }
+            }
             int taken = 0;
-            for (int i = st.log.Count - 1; i >= 0 && taken < 3; i--)
+            for (int i = st.log.Count - 1; i >= 0 && taken < 2; i--)
             {
                 var l = st.log[i];
                 if (l.kind == "系统" || string.IsNullOrEmpty(l.text)) continue;
                 sb.Append($"【本周事件】{l.date} {l.text}\n");
                 taken++;
             }
-            sb.Append("【任务】你是科长周衡之（严谨、护短、话少而准）。写周五例会散会后你对这位科员说的一两句点评：结合本周的真实计划与事件，具体、克制，带一点难得的肯定或一句点到为止的提醒。不超过60字。");
+            sb.Append("【任务】你是市政府办公厅主任周谨（闸门、周到、嘴严）。写周五你向市长汇报时补的一两句：结合本周真实卷宗与两把尺，具体、克制，带一点挡驾或提醒。不超过60字。");
             return sb.ToString();
         }
 

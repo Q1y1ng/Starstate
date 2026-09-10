@@ -21,6 +21,7 @@ namespace Starstate.Tests
                 // 可推进判定与 GameApp.UpdateFfButton 一致：日常/任务可代选，剧情与动态抉择必须 Choose
                 bool dayFfable = st.phase == Phase.Day && !st.hasPending
                     && string.IsNullOrEmpty(st.currentEvent)
+                    && st.queue.Count == 0
                     && (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
                 if (dayFfable)
                 {

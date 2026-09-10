@@ -34,23 +34,23 @@ namespace Starstate.Ui
         {
             var sb = new StringBuilder();
             sb.AppendLine($"职级：{st.grade}（自 {st.gradeSince}，任职 {CareerSys.GradeYears(st)} 年）");
-            sb.AppendLine($"编制状态：{(string.IsNullOrEmpty(st.seconded) ? "在局履职" : st.seconded)}");
-            sb.AppendLine($"职业路线：{CareerSys.RouteName(st.route)}");
+            sb.AppendLine($"编制状态：{(string.IsNullOrEmpty(st.seconded) ? "在市履职" : st.seconded)}");
+            sb.AppendLine($"职业路线：{(string.IsNullOrEmpty(st.route) ? "尚未选定主攻" : CareerSys.RouteName(st.route))}");
             sb.AppendLine();
             sb.AppendLine("—— 晋升轨道（总设定·冻结版） ——");
-            sb.AppendLine("吏三·科员 →(≥2年+考核合格) 吏二·副科");
-            sb.AppendLine("吏二·副科 →(≥3年+考核优秀) 吏一·正科");
-            sb.AppendLine("吏一·正科 →(满5年或优秀破格3年＋基层履历24月＋州级考试＋省政治学院1年) 十品·副处");
-            sb.AppendLine($"基层履历：{st.baseExpMonths} / {CareerSys.BaseExpRequired} 个月");
+            sb.AppendLine("七品·市长 →(届中/届终考核+巡视干净+省里推荐) 六品·副省");
+            sb.AppendLine("四品及以上禁破格；七品进高级干部序列。");
+            sb.AppendLine($"本届已任：{CareerSys.GradeYears(st)} / 5 年（五年一届，十年＝两届）");
+            sb.AppendLine($"帝国考试：{(st.examPassed ? "已通过（高等级）" : "未通过")}　政治学院：{(st.academyDone ? "已结业" : "未结业")}");
             sb.AppendLine();
-            sb.AppendLine("—— 年度考核（评优评先） ——");
+            sb.AppendLine("—— 年度考核（双尺复合） ——");
             if (st.evals.Count == 0) sb.AppendLine("（尚未考核）");
             foreach (var ev in st.evals) sb.Append($"{ev.year}:{ev.grade}　");
             sb.AppendLine();
-            sb.AppendLine($"考核优秀累计 {st.outstandingYears} 次｜程序标记 {st.violationCount} 条");
+            sb.AppendLine($"考核优秀累计 {st.outstandingYears} 次｜程序违规累计 {st.violationCount} 条");
             sb.AppendLine();
             sb.AppendLine("—— 生活 ——");
-            string fam = st.hasChild ? "已婚有孩" : st.married ? "已婚" : string.IsNullOrEmpty(st.partner) ? "单身" : $"与{st.partner}恋爱中";
+            string fam = st.hasChild ? "已婚有孩" : st.married ? "已婚" : string.IsNullOrEmpty(st.partner) ? "—" : $"与{st.partner}";
             sb.AppendLine($"婚姻家庭：{fam}");
             sb.AppendLine($"住房：{st.housing}");
             return sb.ToString();
@@ -60,20 +60,22 @@ namespace Starstate.Ui
         {
             var d = GameClock.Parse(st.date);
             var p = st.player;
-            return $"{GameClock.FmtFull(d)}   ｜   第 {st.week.index} 周   ｜   {PhaseLabel(st.phase)}\n" +
-                   $"精力 {Bar(p.energy)} {p.energy}    压力 {Bar(p.stress)} {p.stress}    士气 {p.morale}";
+            int pending = st.pendingDossierIds.Count + (st.activeDossier != null && !st.activeDossier.resolved ? 1 : 0);
+            return $"{GameClock.FmtFull(d)}   ｜   第 {st.week.index} 周   ｜   {PhaseLabel(st.phase)}   ｜   待办卷宗 {pending}\n" +
+                   $"合规 {Bar(st.compliance)} {st.compliance}    效率 {Bar(st.efficiency)} {st.efficiency}    精力 {p.energy}    压力 {p.stress}";
         }
 
         public static string Status(GameState st)
         {
             var sb = new StringBuilder();
             var p = st.player;
-            sb.AppendLine($"姓名：{p.name}（{DateTime.Now.Year - p.birthYear}岁 · 2003年生）");
-            sb.AppendLine($"母校：{p.school} · {p.major}");
-            sb.AppendLine($"单位：{p.unit}");
-            sb.AppendLine($"科室/岗位：{p.post}");
-            sb.AppendLine($"职级：{p.rank}");
-            if (p.probationMonths < 12) sb.AppendLine($"试用期：{p.probationMonths} / 12 个月");
+            int age = 2026 - p.birthYear;
+            sb.AppendLine($"姓名：{p.name}（{age}岁 · {p.birthYear}年生）");
+            sb.AppendLine($"学历：{p.school} · {p.major}");
+            sb.AppendLine($"职务：{p.unit} {p.post}");
+            sb.AppendLine($"品级：{p.rank}");
+            sb.AppendLine($"本届起任：{st.gradeSince}（已任 {Career.GradeYears(st)} 年）");
+            if (!string.IsNullOrEmpty(st.route)) sb.AppendLine($"主攻方向：{st.route}");
             sb.AppendLine();
             sb.AppendLine("—— 能力 ——");
             sb.AppendLine($"专业能力   {Bar(p.attrs.professional)} {p.attrs.professional}");
@@ -82,11 +84,16 @@ namespace Starstate.Ui
             sb.AppendLine($"沟通能力   {Bar(p.attrs.comm)} {p.attrs.comm}");
             sb.AppendLine($"政治敏感度 {Bar(p.attrs.political)} {p.attrs.political}");
             sb.AppendLine();
+            sb.AppendLine("—— 两把尺 ——");
+            sb.AppendLine($"合规分 {Bar(st.compliance)} {st.compliance}　（程序与实体合法性）");
+            sb.AppendLine($"效率分 {Bar(st.efficiency)} {st.efficiency}　（时限、积压、交办）");
+            sb.AppendLine($"本年程序问题 {st.yearIntegrity} 次　累计违规 {st.violationCount} 次");
+            sb.AppendLine();
             sb.AppendLine("—— 资源与状态 ——");
             sb.AppendLine($"精力 {p.energy} / 压力 {p.stress} / 士气 {p.morale}");
-            sb.AppendLine($"社会声望 {p.reputation}（速率随职级递增）");
-            sb.AppendLine($"政治资本 {p.polCapital}");
+            sb.AppendLine($"社会声望 {p.reputation}　政治资本 {p.polCapital}");
             sb.AppendLine($"积蓄 {p.savings} 元（月结余约 {p.monthlyIn - p.monthlyOut} 元）");
+            sb.AppendLine($"家庭：{(st.married ? st.partner : "—")}{(st.hasChild ? "，一子女" : "")}　住房：{st.housing}");
             return sb.ToString();
         }
 

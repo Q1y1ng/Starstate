@@ -80,8 +80,9 @@ namespace Starstate.Tests
             {
                 var dto = ContentNpcTalk.FallbackTalk(st, id);
                 Assert.IsNotNull(dto);
-                Assert.AreEqual(2, dto.options.Length);
-                Assert.IsFalse(string.IsNullOrEmpty(dto.greeting));
+                Assert.GreaterOrEqual(dto.options.Length, 2, id);
+                Assert.LessOrEqual(dto.options.Length, 3, id);
+                Assert.IsFalse(string.IsNullOrEmpty(dto.greeting), id);
             }
         }
     }

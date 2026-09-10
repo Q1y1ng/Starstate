@@ -22,6 +22,7 @@ namespace Starstate.Tests
 
                 bool dayFfable = st.phase == Phase.Day && !st.hasPending
                     && string.IsNullOrEmpty(st.currentEvent)
+                    && st.queue.Count == 0
                     && (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
                 if (dayFfable)
                 {

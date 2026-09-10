@@ -12,20 +12,17 @@ namespace Starstate.Core
         {
             if (_registered) return;
             _registered = true;
-            ContentPrologue.Register();
-            ContentMonth1.Register();
-            ContentCareer.Register();     // 周期性系统事件＋职业链（转正/晋升/考试/学院/任命/监察/辞职）
-            ContentYearsA.Register();     // 2026冬—2029：站稳脚跟
-            ContentYearsB.Register();     // 2030—2032：中层岁月
-            ContentYearsC.Register();     // 2033—2036：转官与十年之约
-            ContentLife.Register();       // 婚恋家庭副线
-            ContentFlavor.Register();     // 生活/社会/机关日常随机事件池（Phase 3 扩容）
-            ContentChains.Register();     // Phase 4：剧情链（回响/分支/死flag兑现/志向）
-            ContentMonthly.Register();    // Phase 4：月度主题事件（一年十二“节律”）
-            ContentClocks.Register();     // 补丁十三：常驻时钟内容（考核冲刺/巡视/专项）
-            ContentRival.Register();      // 补丁十三：同批竞争者里程碑链
-            ContentNews.Register();       // 新闻栏：国际/国内/本地十年新闻流
-            ContentNewsExtra.Register();  // Phase 4 新闻扩容（+40）
+            ContentPrologueMayor.Register();  // Phase 5：七品市长序章三幕
+            ContentDossierM0.Register();      // Phase 5：教学/高光/池卷宗
+            ContentDossierY1.Register();      // Phase 5：第一年季节手写池
+            ContentCareerMayor.Register();    // Phase 5：年度考核＋十年结局
+            ContentRulebook.Register();       // Phase 5：口径手册条目
+            ContentChainsMayor.Register();    // Phase 5：对上报告/算法审批链
+            ContentClocksMayor.Register();    // Phase 5：考核冲刺/巡视时钟
+            DossierGenerator.SeedPool(36, new DateTime(2026, 9, 1)); // 模板池，防第一年枯竭
+            // 旧科员线内容暂不注册（M1 迁移或废弃）
+            ContentNews.Register();
+            ContentNewsExtra.Register();
         }
 
         // ---------------- 年度背景数据（编年史 2026 为冻结口径，此后为一致性推演） ----------------
@@ -68,6 +65,23 @@ namespace Starstate.Core
 
         public static readonly Dictionary<string, string[]> GenericDayPools = new Dictionary<string, string[]>
         {
+            // Phase 5：市长案头日常（优先于科员池）
+            ["mayor"] = new[]
+            {
+                "周谨把下午的会见名单放在桌角：企业两家、信访一批、省里视频会一场。你把中间那条划到了最后。",
+                "财政局送来的月报你只看了合计栏——合计对了，再看分项；合计不对，分项不用看。",
+                "产业园的玻璃幕墙在下午反光刺眼。你在窗边站了半分钟，回去把那份框架协议的违约条款又读了一遍。",
+                "会议室的茶凉了三回。常务会散了，纪要还没定稿——定稿的人比开会的人更懂哪句话会变成责任。",
+                "司机在楼下多等了二十分钟。你签完最后一件「急」件才下楼，袖口沾了一点印泥。",
+                "省里视频会点名大同作典型发言。你准备了三页纸，最后只念了半页——留白也是一种汇报策略。",
+                "信访局又转来一批联名信。你让办公厅按小区归堆，先看上年投诉最多的那三个。",
+                "方启年抱着账本在门口站了一会儿，没进来。你让周谨请他进来——财政局长的欲言又止，往往比报告重要。",
+                "午后你在签批栏写了很长一段批示，又全部划掉，改成「请按程序办理」六个字。短，有时候更重。",
+                "楼道里遇见沈砚。他点了点头，没说话。你回到办公室，把一份材料的附件页又翻了一遍。",
+                "台历撕到本周最后一页。待办还有两件，其中一件你压了三天——压着，也是一种态度。",
+                "林晚发来消息：孩子家长会你「因故缺席」。你回了一个「好」字，然后把手机扣在桌上。",
+            },
+            // 以下仍为科员线日常（Phase 1–4；市长开局优先用 ["mayor"]）
             ["work"] = new[]
             {
                 "一上午都在核对表格。数字不会说话，但会留痕——你把每一处口径都标了颜色。",

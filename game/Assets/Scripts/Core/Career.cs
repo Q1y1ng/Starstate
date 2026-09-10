@@ -1,22 +1,19 @@
 using System;
-using System.Collections.Generic;
 
 namespace Starstate.Core
 {
     /// <summary>
-    /// 职业生涯系统：吏轨晋升与转官规则全部依据总设定（冻结版晋升年限表）。
-    /// 吏三→吏二≥2年＋考核合格；吏二→吏一≥3年＋考核优秀；
-    /// 转官：吏一满一届5年（优秀破格满3年，须特批）＋基层公共事务履历≥24个月
-    ///      ＋州级转官考试＋省政治学院1年 → 十品·副处。
+    /// 职业生涯（Phase 5）：七品市长 → 六品副省 / 其他结局。
+    /// 依据总设定：一届＝5 年；七品晋升六品需中央年度考核累计优良＋履历完整。
+    /// 四品及以上禁破格——六品起满届说话。
     /// </summary>
     public static class Career
     {
-        public const int PromoteYearsLi2 = 2;     // 吏三→吏二
-        public const int PromoteYearsLi1 = 3;     // 吏二→吏一
-        public const int ExamYearsStandard = 5;   // 吏一满一届
-        public const int ExamYearsFast = 3;       // 优秀破格
-        public const int ExamFastOutstanding = 2; // 破格所需优秀次数
-        public const int BaseExpRequired = 24;    // 基层履历（月）
+        public const int TermYears = 5;
+        public const int PromoteYearsTo6 = 5;   // 七品满一届方可竞争六品
+        public const int PromoteFast = 3;       // 理论破格线
+        public const int FastTrackMarks = 3;    // 开局特批次数（巡视质疑源）
+        public const int BaseExpRequired = 24;  // 旧吏轨兼容常量
 
         public static int GradeYears(GameState st)
         {
@@ -25,162 +22,149 @@ namespace Starstate.Core
             return (int)((now - since).TotalDays / 365.25);
         }
 
-        public static bool CanPromoteLi2(GameState st)
+        // —— 旧吏轨 API 桩：Phase 5 已改为七品路径；保留签名供 Flow 旧动态事件编译通过 ——
+        public static bool CanPromoteLi2(GameState st) => false;
+        public static bool CanPromoteLi1(GameState st) => false;
+        public static bool ExamEligible(GameState st, out string reason) { reason = "Phase 5：七品路径不走州级转官考试"; return false; }
+        public static string RouteName(string route)
         {
-            return st.grade.StartsWith("吏三") && GradeYears(st) >= PromoteYearsLi2 && HasPassingEval(st);
-        }
-
-        public static bool CanPromoteLi1(GameState st)
-        {
-            return st.grade.StartsWith("吏二") && GradeYears(st) >= PromoteYearsLi1 && st.outstandingYears >= 1;
-        }
-
-        /// <summary>是否已具备参加州级转官考试的条件（优秀破格或届满）。</summary>
-        public static bool ExamEligible(GameState st, out string reason)
-        {
-            reason = "";
-            if (!st.grade.StartsWith("吏一")) { reason = "需先晋升吏一（正科）"; return false; }
-            if (st.examPassed) { reason = "已通过考试"; return false; }
-            int years = GradeYears(st);
-            bool standard = years >= ExamYearsStandard;
-            bool fast = years >= ExamYearsFast && st.outstandingYears >= ExamFastOutstanding;
-            if (!standard && !fast)
+            switch (route)
             {
-                reason = standard ? "" : (years < ExamYearsFast
-                    ? $"任吏一满{ExamYearsFast}年且考核优秀{ExamFastOutstanding}次可申请优秀破格，满{ExamYearsStandard}年按届满报考"
-                    : $"优秀破格需考核优秀{ExamFastOutstanding}次（现有{st.outstandingYears}次）");
-                return false;
+                case "industry": return "产业转型";
+                case "people": return "民生兜底";
+                case "project": return "项目攻坚";
+                case "uplink": return "向上争取";
+                default: return string.IsNullOrEmpty(route) ? "（未定）" : route;
             }
-            if (st.baseExpMonths < BaseExpRequired)
-            {
-                reason = $"基层公共事务履历不足（{st.baseExpMonths}/{BaseExpRequired} 个月）";
-                return false;
-            }
-            return true;
         }
 
         public static bool HasPassingEval(GameState st)
         {
             for (int i = st.evals.Count - 1; i >= 0; i--)
                 if (st.evals[i].grade == "称职" || st.evals[i].grade == "优秀") return true;
-            return st.evals.Count == 0; // 首年未考核视为可晋升
+            return st.evals.Count == 0;
         }
 
-        /// <summary>年度考核评定（评优评先：竞争性）。评优失败降为称职；严重程序问题封顶基本称职。</summary>
-        public static string EvaluateYear(GameState st, bool compete, System.Random rng)
+        /// <summary>是否具备竞争六品（副省级市主官/省厅正职）的基本年限条件。</summary>
+        public static bool CanCompete6(GameState st, out string reason)
+        {
+            reason = "";
+            if (!st.grade.StartsWith("七品")) { reason = "需在七品任上"; return false; }
+            int years = GradeYears(st);
+            if (years < PromoteYearsTo6)
+            {
+                reason = $"现届已任 {years} 年，满 {PromoteYearsTo6} 年（一届）方可进入六品酝酿";
+                return false;
+            }
+            if (st.compliance < 55)
+            {
+                reason = $"合规分偏低（{st.compliance}），御史评价会压住名单";
+                return false;
+            }
+            if (st.efficiency < 45)
+            {
+                reason = $"效率分偏低（{st.efficiency}），省里交办完成率不够看";
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>年度考核：合规/效率双尺＋关系＋程序问题。</summary>
+        public static string EvaluateYear(GameState st, bool compete, Random rng)
         {
             if (st.yearIntegrity >= 2) return "基本称职";
+            if (st.compliance < 40) return "基本称职";
             int score = st.yearGradePoints
-                      + Math.Max(-10, Math.Min(15, RelEvalSum(st) / 5))
+                      + (st.compliance - 70) / 2
+                      + (st.efficiency - 60) / 3
                       + (compete ? 2 : 0)
-                      + (rng != null ? rng.Next(0, 12) : 6);
-            if (compete && score >= 68) return "优秀";
+                      + (rng != null ? rng.Next(0, 10) : 5);
+            if (compete && score >= 62 && st.compliance >= 70 && st.efficiency >= 55) return "优秀";
+            if (score < 20) return "基本称职";
             return "称职";
         }
 
-        private static int RelEvalSum(GameState st)
-        {
-            int s = 0;
-            var r = st.relations.Find(x => x.id == "zhou");
-            if (r != null) s += r.evalv;
-            var m = st.relations.Find(x => x.id == "ma");
-            if (m != null) s += m.evalv / 2;
-            return s;
-        }
-
-        /// <summary>十年结局计算：多结局（Q4-04）。被审查调查 / 辞职 / 十品 / 吏一骨干 / 平稳行者 / 十年一日。</summary>
         public static EndingData ComputeEnding(GameState st)
         {
             var e = new EndingData();
             var p = st.player;
-            int age = 2036 - p.birthYear;
-            string family = st.hasChild ? "已婚有孩，家里有了新的牵挂"
-                          : st.married ? "已婚，两个人把日子过成了同盟"
-                          : string.IsNullOrEmpty(st.partner) ? "孑然一身，把机关当家" : "恋爱中，人生多了半个人的分量";
+            int age = 2036 - p.birthYear; // 51
+            string family = st.hasChild ? "孩子已经能读懂你签批里那些欲言又止的句子"
+                          : st.married ? "林晚把家里那盏灯一直留着"
+                          : "你把市政府当成了家";
 
             if (st.underInvestigation)
             {
                 e.title = "结局 · 接受审查调查";
-                e.paras.Add($"2036年，{p.name}因涉嫌严重违反程序被留置审查。档案上那些“当年觉得没什么”的签名，此刻一页页摊在桌面上。");
-                e.paras.Add("监察条例写得清楚：程序的每一次让步，都是欠给制度的一笔债。总有一天，连本带息。");
+                e.paras.Add($"2036年秋，{p.name}被宣布接受审查调查。办公室的门从里面锁上，再打开时，桌上只剩一盆没人浇水的文竹。");
+                e.paras.Add("卷宗柜里那些“当时觉得没什么”的批示，一页页被翻出来对时。制度的债，从来不会因为你签得快就消失。");
+                e.paras.Add($"{family}。只是这一次，灯下等的人等来的不是归期。");
             }
             else if (st.resigned)
             {
                 e.title = "结局 · 转身离开";
-                e.paras.Add($"{p.name}递辞呈那天，长安在下小雨。工牌交还人事科的那一刻，十年机关生涯归档。");
-                e.paras.Add($"有人惋惜，有人不解。但只有你自己知道：{family}，今后的路，换一种走法。");
+                e.paras.Add($"{p.name}递辞呈那天，云中在下第一场雪。七品正厅的工牌交还办公厅，周谨接过去时手指顿了一下。");
+                e.paras.Add($"有人惋惜，有人松了口气。{family}。往后的路，换一种走法——至少，签字只对自己负责。");
             }
-            else if (st.grade.StartsWith("十品"))
+            else if (st.grade.StartsWith("六品"))
             {
-                e.title = "结局 · 十品副处";
-                e.paras.Add($"{age}岁的{p.name}，从科员到副处——用十年走完了许多人半辈子的路。组织鉴定上写着：“善于学习，作风扎实，程序意识强。”");
-                e.paras.Add($"上任那天，你路过综合科的窗，看见一个新的年轻人正在给你的绿萝浇水。{family}。");
+                e.title = "结局 · 六品副省";
+                e.paras.Add($"{age}岁的{p.name}离开大同时，车窗外的矸石山被夕阳切出一道金边。中央组织委员会的备案函在公文包里，轻得像一张纸，重得像一座城。");
+                e.paras.Add("组织鉴定写着：“政治上成熟，驾驭复杂局面能力较强。”——“驾驭复杂局面”，是你十年签批里最贵的六个字。");
+                e.paras.Add($"{family}。新的办公桌上，文件已经码好了第一摞。");
             }
-            else if (st.grade.StartsWith("吏一"))
+            else if (st.compliance >= 75 && st.efficiency >= 60)
             {
-                e.title = st.outstandingYears >= 2 ? "结局 · 正科骨干，转官在即" : "结局 · 机关中坚";
-                e.paras.Add(st.outstandingYears >= 2
-                    ? $"考核优秀的次数攒够了，州级转官考试的准考证就在抽屉里。{age}岁的正科，前路清晰。"
-                    : $"{p.name}成了局里公认的熟手：材料把关、数据口径、部门协调，样样离不得。{family}。");
+                e.title = "结局 · 平稳主官";
+                e.paras.Add($"两届任满，{p.name}没有去更好的地方，也没有出事。大同的财政窟窿补上了一半，AI 产业园的灯亮了一半。");
+                e.paras.Add("有人说你保守，有人说你干净。在七品这个位子上，干净本身就是政绩。");
+                e.paras.Add($"{family}。你终于可以准点下班，把签批的速度，放慢到一笔一画。");
             }
-            else if (st.grade.StartsWith("吏二"))
+            else if (st.compliance < 45)
             {
-                e.title = "结局 · 平稳行者";
-                e.paras.Add($"十年，从吏三到吏二。没有火箭式的速度，但每一份材料都经得起翻阅。{family}。");
-                e.paras.Add("赵姐退休那天说过：“平平稳稳，也是一种本事。”你如今懂了这句话的分量。");
+                e.title = "结局 · 灰色着陆";
+                e.paras.Add($"没有立案，也没有嘉奖。{p.name}被调任省里一个清闲署的巡视员——档案袋上盖着“工作需要”。");
+                e.paras.Add("你知道那些漏查的雷没有炸完，只是被挪到了别人够不着的抽屉。");
+                e.paras.Add($"{family}。夜里还是会醒，听楼道有没有脚步声。");
             }
             else
             {
                 e.title = "结局 · 十年一日";
-                e.paras.Add($"十年科员。你把最普通的位置坐成了钉子——局里谁都说你“可靠”，只是档案上的职级没什么变化。{family}。");
+                e.paras.Add($"2036年，{p.name}仍在大同。城市不大不小，文件不多不少，你的批语越来越短。");
+                e.paras.Add("十年市长，说不上功，说不上过。云中的风还是从北边来，卷着煤尘和一点新时代的电弧味。");
+                e.paras.Add($"{family}。这样的一生，在这座城里，已经比多数人完整。");
             }
 
-            // —— 个人史回响（Phase 4）：结局由你一路留下的叙事标记装配 ——
+            e.paras.Add("—— 十年回响 ——");
             AppendMarkEchoes(st, e);
-
-            // 数据段
-            e.paras.Add($"—— 十年档案 ——");
-            e.paras.Add($"职级：{st.grade}｜路线：{RouteName(st.route)}｜考核优秀 {st.outstandingYears} 次｜基层履历 {st.baseExpMonths} 个月");
-            e.paras.Add($"经手任务 {st.tasks.Count} 项｜材料 {st.documents.Count} 份｜奖惩：表扬 {st.commendations.Count} 次、程序标记 {st.integrity.Count} 条");
-            e.paras.Add($"积蓄 {p.savings} 元｜住房：{st.housing}｜社会声望 {p.reputation}｜政治资本 {p.polCapital}");
             return e;
         }
 
-        public static string RouteName(string r)
+        public static void AppendMarkEchoes(GameState st, EndingData e)
         {
-            switch (r)
+            void Line(string mark, string text)
             {
-                case "笔杆子": return "综合文秘（笔杆子）";
-                case "产业经济": return "产业经济";
-                case "投资项目": return "投资项目";
-                case "区域协调": return "区域协调";
+                if (st.HasMark(mark)) e.paras.Add(text);
             }
-            return string.IsNullOrEmpty(r) ? "未定" : r;
-        }
-
-        /// <summary>结局个人史：按叙事标记装配“十年回响”段落——选择过的东西，结局时都回来。</summary>
-        private static void AppendMarkEchoes(GameState st, EndingData e)
-        {
-            var lines = new List<string>();
-            if (st.ambition == "做事") lines.Add("你当初想“做点实际的事”——经手的台账与项目，替你守住了这句话。");
-            else if (st.ambition == "晋升") lines.Add($"你当初想往上走——{st.grade}，是你给自己的回执。");
-            else if (st.ambition == "安稳") lines.Add("你当初想把日子过安稳——如今回头看，安稳确实是一种需要本事的东西。");
-            else if (st.ambition == "搞钱") lines.Add($"你当初想让家里宽裕些——积蓄 {st.player.savings} 元，是你十年的另一种答卷。");
-
-            if (st.HasMark("ledger_refused")) lines.Add("2027年那份台账，你顶住了——多年后每当有人问起“程序值不值”，你都有底气。");
-            else if (st.HasMark("ledger_complicit")) lines.Add("2027年那份台账，你调了数——这些年它像一枚软钉子，偶尔在你的梦里硌一下。");
-            else if (st.HasMark("ledger_reported")) lines.Add("2027年那份台账，你选择上报——科长当时没说什么，但后来的很多事说明他记住了。");
-            if (st.HasMark("ai_seconded")) lines.Add("算法备案专班的那一年，让你在AI时代的档案里留下了自己的名字。");
-            if (st.HasMark("house_owned_m")) lines.Add("那套咬着牙买下的房子，从“负担”慢慢变成了“底气”。");
-            else if (st.HasMark("house_family_m")) lines.Add("房子首付里有父母的存折——你一直记得那份重量的利息该怎么还。");
-            if (st.HasMark("family_care_m")) lines.Add("陪父亲复查的那个秋天，你请的假在考勤表上留过痕——但你从没后悔过一天。");
-            if (st.HasMark("laokang_friend")) lines.Add("青溪乡的老康一直记得你。基层一年的回报，有时要等很多年才到账。");
-            if (st.HasMark("dream_kept_m")) lines.Add("抽屉里那句入职时写下的话，你留到了最后——它没白被写下。");
-            if (st.HasMark("stay_clean_m")) lines.Add("同学递来的橄榄枝你接了又放下——不是不心动，是你确认了自己要什么。");
-            if (st.HasMark("marathon_m")) lines.Add("那场马拉松的奖牌还在书柜里：42.195公里教会你的事，机关里一样用得上。");
-            if (lines.Count == 0) return;
-            e.paras.Add("—— 十年回响 ——");
-            foreach (var l in lines) e.paras.Add(l);
+            Line("fast_track", "档案里那三次“优秀破格”的特批，在每一次巡视谈话里都被轻轻翻过——荣光与靶子，本就是同一枚印章的两面。");
+            Line("origin_huabei", "你出身华北的产业工人家庭。签字时，你总想起厂区公告栏前的人群——有些数字背后是饭碗。");
+            Line("origin_jiangnan", "你出身商贾之家。有人说你懂市场；只有你知道，你更懂“国家稳，生意才稳”。");
+            Line("origin_guanzhong", "你出身关中吏员家庭。编制与分寸，是饭桌上最早学会的两个词。");
+            Line("patron_province", "省里那条线一直托着你。托举的另一面，是随时可以松手。");
+            Line("patron_none", "你没有靠山，只好把每一份材料都做得让人挑不出刺——干净，是无依无靠者唯一的派系。");
+            Line("pressed_report", "那份被你压下又改过的对上报告，像一根细刺，十年后仍在某份巡视底稿里。");
+            Line("algo_pass", "你签过“算法辅助、人工终审”。后来《AI治理法》专条落地，你的那一页批示被当作正面案例——或反面，取决于谁在念。");
+            Line("helped_petition", "你接过一次群众的门。十年后还有人记得市长办公室的灯。");
+            Line("gray_favor", "你特事特办过一次。就一次。档案却不会写“就一次”。");
+            if (st.dossierLog.Count > 0)
+            {
+                int missed = 0;
+                foreach (var d in st.dossierLog) missed += d.issuesMissed;
+                if (missed > 3)
+                    e.paras.Add($"十年里，你漏查过至少 {missed} 处材料问题。大多没有炸。大多，不等于全部。");
+                else
+                    e.paras.Add("十年里，你桌上的雷，多数被你自己拆掉了。这在七品里，已属难得。");
+            }
         }
     }
 }

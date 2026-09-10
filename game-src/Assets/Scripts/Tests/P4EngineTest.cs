@@ -49,8 +49,9 @@ namespace Starstate.Tests
             var st = ToDay();
             bool seen = false;
             int guard = 0;
-            while (guard++ < 80)
+            while (guard++ < 400)
             {
+                if (st.phase == Phase.WeekPlan) Flow.Choose(st, 0);
                 var scene = Flow.CurrentScene(st);
                 if (scene.title == "回响源头")
                 {
@@ -59,7 +60,12 @@ namespace Starstate.Tests
                     continue;
                 }
                 if (scene.title == "回响抵达") { seen = true; break; }
-                Flow.Choose(st, 0);
+                bool dayFfable = st.phase == Phase.Day && !st.hasPending
+                    && string.IsNullOrEmpty(st.currentEvent)
+                    && st.queue.Count == 0
+                    && (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
+                if (dayFfable) Flow.FastForward(st);
+                else Flow.Choose(st, 0);
             }
             Assert.IsTrue(seen, "回响事件应在数日后入队并被呈现");
         }
@@ -78,12 +84,17 @@ namespace Starstate.Tests
 
             var st = ToDay();
             int seen = 0, guard = 0;
-            while (guard++ < 400 && seen < 3)
+            while (guard++ < 800 && seen < 3)
             {
                 if (st.phase == Phase.WeekPlan) Flow.Choose(st, 0);
                 var scene = Flow.CurrentScene(st);
-                if (scene.title == "循环事件") seen++;
-                Flow.Choose(st, 0);
+                if (scene.title == "循环事件") { seen++; Flow.Choose(st, 0); continue; }
+                bool dayFfable = st.phase == Phase.Day && !st.hasPending
+                    && string.IsNullOrEmpty(st.currentEvent)
+                    && st.queue.Count == 0
+                    && (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
+                if (dayFfable) Flow.FastForward(st);
+                else Flow.Choose(st, 0);
             }
             Assert.GreaterOrEqual(seen, 3, "重复触发应实际被呈现（池不枯竭）");
             Assert.GreaterOrEqual(st.FireCount("t_pool_repeat"), 3, "maxFires>0 的池事件应可重复触发");

@@ -41,14 +41,13 @@ namespace Starstate.Core
             st.phase = Phase.Prologue;
             st.date = GameClock.Iso(GameClock.GameStart);
             st.queue.Clear();
-            st.queue.Add("pre0"); st.queue.Add("pre1"); st.queue.Add("pre_grand"); st.queue.Add("p1");
-            st.queue.Add("pre_exam"); st.queue.Add("pre_city"); st.queue.Add("p0"); st.queue.Add("p_ambition");
-            st.queue.Add("p2");
+            st.queue.Add("mp0"); st.queue.Add("mp1"); st.queue.Add("mp2");
             st.currentEvent = null;
             st.runtimeEvent = null;
             st.hasPending = false;
             st.week.index = 1;
             st.month.key = GameClock.MonthKey(GameClock.GameStart);
+            DossierEngine.ClearRuntime();
         }
 
         private static DateTime Today(GameState st) => GameClock.Parse(st.date);
@@ -225,8 +224,74 @@ namespace Starstate.Core
                 case Phase.Ending:
                     var e = st.endingData ?? Career.ComputeEnding(st);
                     return new Scene { kind = "ending", title = e.title, paras = e.paras, options = new List<string> { "再走一遍（新游戏）", "离开" } };
-                default: return EventScene(st); // Prologue / Day
             }
+
+            // Day / Prologue：脚本事件优先（剧情节点必停），其次卷宗，最后日常
+            if (st.queue.Count > 0 || !string.IsNullOrEmpty(st.currentEvent))
+                return EventScene(st);
+            if (st.activeDossier != null && !st.activeDossier.resolved && st.phase == Phase.Day)
+                return DossierScene(st);
+            return EventScene(st);
+        }
+
+        /// <summary>卷宗呈现场景。UI 按 kind=="dossier" 走办公桌/卷宗视图。</summary>
+        public static Scene DossierScene(GameState st)
+        {
+            var d = DossierEngine.Current(st);
+            var act = st.activeDossier;
+            if (d == null || act == null)
+                return new Scene { kind = "day", title = "办公室", paras = new List<string> { "桌上暂时没有待办卷宗。" }, options = new List<string> { "继续" } };
+
+            int page = Math.Max(1, Math.Min(d.pages.Count, act.page));
+            var pg = d.pages[page - 1];
+            var paras = new List<string>();
+            // 案头眉：形态 / 来文 / 时限 / 页码 / 核对——一行扫完，不占正文
+            string overdue = "";
+            if (!string.IsNullOrEmpty(d.deadline) && string.Compare(st.date, d.deadline) > 0) overdue = "　【已逾期】";
+            string formTag = string.IsNullOrEmpty(d.form) ? "" : "【" + d.form + "】";
+            paras.Add($"{formTag}{d.org}　文号 {d.docNo}　时限 {d.deadline}{overdue}");
+            paras.Add($"第 {page}/{d.pages.Count} 页 · {pg.title}　｜　核对剩余 {act.checksLeft}　已查出 {act.foundIssues.Count}/{d.issues.Count}");
+            // 已查出问题的铅笔痕（只列线索，不重复完整结论）
+            if (act.foundIssues.Count > 0)
+            {
+                var marks = new List<string>();
+                foreach (var fid in act.foundIssues)
+                {
+                    foreach (var iss in d.issues)
+                        if (iss.id == fid) marks.Add("铅笔痕：" + iss.detectHint);
+                }
+                if (marks.Count > 0) paras.AddRange(marks);
+            }
+            string deskHint = Rulebook.DeskHint(st, d);
+            if (!string.IsNullOrEmpty(deskHint)) paras.Add(deskHint);
+            if (pg.paras != null) paras.AddRange(pg.paras);
+            if (!string.IsNullOrEmpty(pg.table)) paras.Add(pg.table);
+
+            var opts = new List<string>();
+            var locks = new List<string>();
+            bool anyLock = false;
+            if (page > 1) { opts.Add("◀ 上一页"); locks.Add(""); }
+            if (page < d.pages.Count) { opts.Add("下一页 ▶"); locks.Add(""); }
+            opts.Add("核 对"); locks.Add("");
+            foreach (var o in d.options)
+            {
+                string reason;
+                bool ok = DossierEngine.OptionAvailable(st, o, out reason);
+                opts.Add(ok ? o.label : o.label + " 🔒");
+                locks.Add(ok ? "" : reason);
+                if (!ok) anyLock = true;
+            }
+
+            var scene = new Scene
+            {
+                kind = "dossier",
+                title = d.title,
+                paras = paras,
+                options = opts,
+                docNo = d.docNo,
+            };
+            if (anyLock || opts.Count > 0) scene.optionLocks = locks;
+            return scene;
         }
 
         private static string Fill(string text, GameState st)
@@ -361,7 +426,11 @@ namespace Starstate.Core
 
             string focus = st.week.focus ?? "work";
             if (!ContentRegistry.GenericDayPools.ContainsKey(focus)) focus = "work";
-            var pool = ContentRegistry.GenericDayPools[focus];
+            // 七品市长：案头日常优先
+            bool mayor = st.grade != null && st.grade.StartsWith("七品");
+            var pool = mayor && ContentRegistry.GenericDayPools.ContainsKey("mayor")
+                ? ContentRegistry.GenericDayPools["mayor"]
+                : ContentRegistry.GenericDayPools[focus];
             string text = pool[Rng.Next(pool.Length)];
 
             Effects fx;
@@ -491,9 +560,26 @@ namespace Starstate.Core
                 case Phase.Ending: return; // 由 UI 层处理（新游戏/退出）
             }
 
-            // ② 事件（脚本事件 / 动态事件 / 日常伪事件）
+            // ② 卷宗办理（Phase 5）
+            if (st.activeDossier != null && !st.activeDossier.resolved && st.phase == Phase.Day)
+            {
+                ChooseDossier(st, idx);
+                return;
+            }
+
+            // ③ 事件（脚本事件 / 动态事件 / 日常伪事件）
             GameEvent ev = TakeNext(st);
-            if (ev == null) { EndOfDay(st); return; }
+            if (ev == null)
+            {
+                if (st.phase == Phase.Day && DossierEngine.HasWork(st))
+                {
+                    if (st.activeDossier == null || st.activeDossier.resolved)
+                        DossierEngine.OpenNext(st);
+                    if (st.activeDossier != null && !st.activeDossier.resolved) return;
+                }
+                EndOfDay(st);
+                return;
+            }
 
             var vis = VisibleOptions(ev, st);
             if (idx < 0 || idx >= vis.Count) idx = 0;
@@ -539,25 +625,6 @@ namespace Starstate.Core
             }
         }
 
-        private static void AfterPending(GameState st)
-        {
-            switch (st.phase)
-            {
-                case Phase.WeekEnd:
-                    if (GameClock.IsLastDayOfMonth(Today(st))) SettleMonth(st);
-                    else BeginWeekend(st);
-                    return;
-                case Phase.Weekend:
-                    GotoMonday(st); return;
-                case Phase.MonthEnd:
-                    NextMonthDay(st); return;
-                case Phase.Ending:
-                    return; // 停在结局
-                default:
-                    DayAdvance(st); return;
-            }
-        }
-
         private static void DayAdvance(GameState st)
         {
             if (st.queue.Count > 0) return; // 下一个事件将由 EventScene 取出
@@ -595,10 +662,39 @@ namespace Starstate.Core
             st.phase = Phase.WeekPlan;
             st.currentEvent = null;
             st.runtimeEvent = null;
-            CollectDue(st, d);        // 先建队列（NpcTick 的入队会被日清空冲掉，顺序不可反）
+            CollectDue(st, d);
             ResetWeek(st, d);
             st.month.key = GameClock.MonthKey(d);
-            st.AddLog("系统", "入职：长安市发展和改革局综合科，科员（吏三），试用期一年");
+            st.AddLog("系统", "就任：大同市人民政府市长（七品·正厅）");
+        }
+
+        private static void AfterPending(GameState st)
+        {
+            switch (st.phase)
+            {
+                case Phase.WeekEnd:
+                    if (GameClock.IsLastDayOfMonth(Today(st))) SettleMonth(st);
+                    else BeginWeekend(st);
+                    return;
+                case Phase.Weekend:
+                    GotoMonday(st); return;
+                case Phase.MonthEnd:
+                    NextMonthDay(st); return;
+                case Phase.Ending:
+                    return; // 停在结局
+                default:
+                    // 卷宗办结结果后：关卷并接下一件（同日可连办）
+                    if (st.activeDossier != null && st.activeDossier.resolved)
+                    {
+                        DossierEngine.CloseActive(st);
+                        if (st.phase == Phase.Day && DossierEngine.HasWork(st))
+                        {
+                            DossierEngine.OpenNext(st);
+                            return;
+                        }
+                    }
+                    DayAdvance(st); return;
+            }
         }
 
         private static void ResetWeek(GameState st, DateTime d)
@@ -608,8 +704,82 @@ namespace Starstate.Core
             st.week.tasks.Clear();
             st.week.reviewed = false;
             st.plan.hasPlan = false;
-            st.rival.progress = Math.Min(100, st.rival.progress + 1 + Rng.Next(2));   // 竞争者也在往前走
-            NpcTick.WeeklyTick(st);   // 周一：人物随时间变动（淡忘/偶发主动找你）
+            st.rival.progress = Math.Min(100, st.rival.progress + 1 + Rng.Next(2));
+            NpcTick.WeeklyTick(st);
+            DossierEngine.AssignWeek(st);
+        }
+
+        /// <summary>卷宗场景选项：翻页 / 核对 / 处置。</summary>
+        private static void ChooseDossier(GameState st, int idx)
+        {
+            var d = DossierEngine.Current(st);
+            var act = st.activeDossier;
+            if (d == null || act == null) return;
+
+            int i = 0;
+            if (act.page > 1)
+            {
+                if (idx == i) { DossierEngine.TurnPage(st, -1); return; }
+                i++;
+            }
+            if (act.page < d.pages.Count)
+            {
+                if (idx == i) { DossierEngine.TurnPage(st, +1); return; }
+                i++;
+            }
+            // 核对
+            if (idx == i)
+            {
+                var found = DossierEngine.CheckPage(st);
+                st.hasPending = true;
+                if (found != null)
+                {
+                    st.pendingTitle = "核对 · 有发现";
+                    st.pendingParas = new List<string>
+                    {
+                        $"你在第 {act.page} 页查出问题：{found.detectHint}",
+                        $"严重程度：{new string('●', Math.Max(1, found.severity))}",
+                        "（处置时，未查出的问题会按严重度扣合规分。）",
+                    };
+                    // 查出问题即授予对应口径（手册会越用越厚）
+                    if (!string.IsNullOrEmpty(found.ruleKey) && Rulebook.IsRegistered(found.ruleKey))
+                    {
+                        bool isNew = !st.knownRules.Contains(found.ruleKey);
+                        Rulebook.Grant(st, found.ruleKey);
+                        if (isNew)
+                            st.pendingParas.Add($"（案头多了一份口径：《{Rulebook.Title(found.ruleKey)}》——可到侧栏「口径」摊开。）");
+                    }
+                }
+                else
+                {
+                    st.pendingTitle = "核对 · 本页未见异常";
+                    st.pendingParas = new List<string>
+                    {
+                        "你逐行扫过。数字对得上，印章位置也对。也可能——问题不在这一页。",
+                        $"核对次数剩余：{act.checksLeft}",
+                    };
+                    // 案头口径若命中他页，给方向而不剧透结论
+                    var openHit = Rulebook.FindOpenRuleIssue(st, d);
+                    if (openHit != null)
+                    {
+                        int hitPage = 1;
+                        int.TryParse(openHit.pageRef, out hitPage);
+                        if (hitPage < 1) hitPage = 1;
+                        st.pendingParas.Add($"对照案头《{Rulebook.Title(st.openRule)}》，这类问题更常出现在附件或签批栏——不妨翻到第 {hitPage} 页再核。");
+                    }
+                }
+                return;
+            }
+            i++;
+            int optIdx = idx - i;
+            if (optIdx < 0 || optIdx >= d.options.Count) return;
+            var entry = DossierEngine.Resolve(st, optIdx);
+            if (entry == null) return;
+            st.hasPending = true;
+            st.pendingTitle = d.title;
+            st.pendingParas = act.pendingResultParas != null && act.pendingResultParas.Count > 0
+                ? act.pendingResultParas
+                : new List<string> { "已签批。" };
         }
 
         private static void Drift(GameState st, DateTime d)
@@ -617,7 +787,7 @@ namespace Starstate.Core
             var p = st.player;
             if (GameClock.IsWorkday(d))
             {
-                int drain = Math.Max(2, 8 - st.plan.rest / 12);      // 休整投入越高，日常耗损越低
+                int drain = Math.Max(2, 8 - st.plan.rest / 12);
                 int stressUp = st.plan.rest >= 30 ? 1 : 2;
                 p.energy = Clamp(p.energy - drain, 0, 100);
                 p.stress = Clamp(p.stress + stressUp, 0, 100);
@@ -669,7 +839,14 @@ namespace Starstate.Core
             st.week.focus = DominantFocus(st);
             st.plan.hasPlan = true;
             st.phase = Phase.Day;
-            if (st.queue.Count == 0) EndOfDay(st); // 空周兜底（正常不会发生）
+            // 剧情队列优先；否则打开本周卷宗
+            if (st.queue.Count == 0 && DossierEngine.HasWork(st))
+            {
+                if (st.activeDossier == null || st.activeDossier.resolved)
+                    DossierEngine.OpenNext(st);
+                return;
+            }
+            if (st.queue.Count == 0) EndOfDay(st);
         }
 
         // ---------------- 周点评 ----------------
@@ -908,38 +1085,64 @@ namespace Starstate.Core
             // 护栏：屏上有待抉择事件时禁止快进（否则事件被标记已触发却未结算，永久丢失）
             if (!string.IsNullOrEmpty(st.currentEvent)) return;
             if (st.runtimeEvent != null && st.runtimeEvent.id != "_generic_day" && st.runtimeEvent.id != "_gen_task") return;
-            int days = 0, tasks = 0, months = 0;
+            int days = 0, tasks = 0, months = 0, dossiers = 0;
             int guard = 0;
             while (guard++ < 8000)
             {
                 if (st.phase == Phase.WeekPlan)
-                    AutoPlan(st);          // 自动按上周计划跑；疲惫时强制休整倾斜
+                    AutoPlan(st);
                 var d = Today(st);
-                if (st.queue.Count > 0) break;                       // 有安排了，交还玩家
+                if (st.queue.Count > 0) break;
                 if (d.DayOfWeek == DayOfWeek.Friday && !st.week.reviewed) { SilentWeek(st); continue; }
                 if (GameClock.IsLastDayOfMonth(d)) { SilentMonth(st, ref months); continue; }
+                // Phase 5：快进时静默办结本周卷宗（选首个可点选项）
+                if (st.phase == Phase.Day && DossierEngine.HasWork(st))
+                {
+                    if (st.activeDossier == null || st.activeDossier.resolved)
+                        DossierEngine.OpenNext(st);
+                    var act = st.activeDossier;
+                    var dz = DossierEngine.Current(st);
+                    if (act != null && !act.resolved && dz != null)
+                    {
+                        int chosen = 0;
+                        for (int oi = 0; oi < dz.options.Count; oi++)
+                        {
+                            string reason;
+                            if (DossierEngine.OptionAvailable(st, dz.options[oi], out reason))
+                            { chosen = oi; break; }
+                        }
+                        var entry = DossierEngine.Resolve(st, chosen);
+                        DossierEngine.CloseActive(st);
+                        if (entry != null) dossiers++;
+                        st.hasPending = false;
+                        continue;
+                    }
+                    // 无法打开/解析时强制关卷，避免死循环
+                    DossierEngine.CloseActive(st);
+                    st.pendingDossierIds.Clear();
+                }
                 NextDay(st);
                 days++;
                 if (st.phase == Phase.WeekPlan) AutoPlan(st);
                 if (st.queue.Count > 0) break;
                 var nd = Today(st);
-                // 每周首件任务必生成，其余工作日 45% 概率——保证长线档案密度稳定
                 if (GameClock.IsWorkday(nd) && st.player.energy > 35 &&
                     (st.week.tasks.Count == 0 || Rng.NextDouble() < 0.45))
                 {
                     st.runtimeEvent = TaskGenerator.Generate(st, nd);
                     int before = st.tasks.Count;
-                    Choose(st, 0);                                    // 自动“认真完成”
-                    st.hasPending = false;                            // 吞掉结果，不推进日结
+                    Choose(st, 0);
+                    st.hasPending = false;
                     if (st.tasks.Count > before) tasks++;
                 }
             }
             var paras = new List<string>();
-            if (days > 0 || tasks > 0 || months > 0)
+            if (days > 0 || tasks > 0 || months > 0 || dossiers > 0)
             {
-                if (days > 0) paras.Add($"日子一页页翻过去：{days} 个日常，开会、写材料、对数据、下楼调研——机关的年轮就是这些细碎的日子刻出来的。");
-                if (tasks > 0) paras.Add($"你经手了 {tasks} 项日常任务，档案上添了 {tasks} 行记录。");
-                if (months > 0) paras.Add($"{months} 张月度结账单。工资准时到账，物价缓慢上涨，城市的新闻换了好几茬。");
+                if (dossiers > 0) paras.Add($"你经手了 {dossiers} 份卷宗——批语长短不一，责任都落在签名上。");
+                if (days > 0) paras.Add($"日子一页页翻过去：{days} 个日常，开会、调研、对表——机关的年轮就是这些细碎的日子刻出来的。");
+                if (tasks > 0) paras.Add($"你经手了 {tasks} 项日常事务，档案上添了 {tasks} 行记录。");
+                if (months > 0) paras.Add($"{months} 张月度结账单。城市新闻换了好几茬。");
                 paras.Add("——有一件事，需要你亲自到场。");
                 st.hasPending = true;
                 st.pendingTitle = "时光荏苒";
@@ -1205,7 +1408,7 @@ namespace Starstate.Core
         // ---------------- 效果结算与检定 ----------------
 
         /// <summary>效果表克隆：共享注册事件的效果不得被单次执行修改（rel 增量、morale 累加等）。</summary>
-        private static Effects CloneEffects(Effects e)
+        public static Effects CloneEffects(Effects e)
         {
             if (e == null) return new Effects();
             return new Effects
@@ -1230,7 +1433,7 @@ namespace Starstate.Core
             };
         }
 
-        private static void ApplyEffects(GameState st, Effects e, string grade)
+        public static void ApplyEffects(GameState st, Effects e, string grade = null)
         {
             if (e == null) return;
             var p = st.player;

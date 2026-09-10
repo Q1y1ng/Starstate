@@ -96,12 +96,13 @@ namespace Starstate.Ui
         private const string PaperWarm = "#FAF5E8";
         private const string TabIdle = "#6B6052";
 
-        private static readonly string[] Tabs = { "状态", "职业", "档案", "人物", "日志", "新闻" };
+        private static readonly string[] Tabs = { "状态", "职业", "档案", "人物", "口径", "日志", "新闻" };
         private static readonly string[] NewsCats = { "国际", "国内", "本地" };
 
         public event Action<int> OnOptionChosen;
         public event Action<int, int> OnPlanAdjusted;   // 周计划编辑器：槽位序号 ±增量
         public event Action<string> OnTabSwitched;
+        public event Action<string> OnRuleOpen;   // 口径手册：摊开/收起（""=收起）
         public event Action OnNewGame;
         public event Action<int> OnContinueSlot;   // 多存档槽：槽位 0=自动 / 1–3
         public event Action<int> OnSnapshotSlot;   // 设置页：快照到手动槽
@@ -152,13 +153,8 @@ namespace Starstate.Ui
             if (inputType != null) esGo.AddComponent(inputType);
             else esGo.AddComponent<StandaloneInputModule>();
 
-            // 全局底：程序生成的米纸纹理（档案美学的底子）
-            var bg = NewGo("PageBG", canvasGo.transform);
-            Stretch(bg.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            var bgImg = bg.AddComponent<Image>();
-            bgImg.sprite = PaperSprite();
-            bgImg.type = Image.Type.Tiled;
-            bg.transform.SetSiblingIndex(0);
+            // 全局底：DeskSurface 木纹桌面＋台灯晕
+            DeskSurface.BuildBackground(canvasGo.transform);
 
             BuildTopBar(canvasGo.transform);
             BuildMainCard(canvasGo.transform);
@@ -224,91 +220,13 @@ namespace Starstate.Ui
             return _cardSprite;
         }
 
-        // ---------------- 档案美学程序纹理（纸纹 / 印章圈 / 撕边） ----------------
+        // ---------------- 档案美学程序纹理（委托 DeskSurface） ----------------
 
-        private static Texture2D _paperTex;
-
-        /// <summary>米纸纹：细颗粒 + 随机纤维，平铺用。</summary>
-        private static Texture2D PaperTex()
-        {
-            if (_paperTex != null) return _paperTex;
-            const int w = 128, h = 128;
-            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
-            tex.wrapMode = TextureWrapMode.Repeat;
-            var rng = new System.Random(20260906);
-            var px = new Color32[w * h];
-            for (int i = 0; i < w * h; i++)
-            {
-                int v = 243 + rng.Next(-7, 8);
-                px[i] = new Color32((byte)v, (byte)(v - 2), (byte)(v - 14), 255);
-            }
-            for (int k = 0; k < 110; k++)   // 纸纤维
-            {
-                int x0 = rng.Next(w), y0 = rng.Next(h), len = rng.Next(3, 10);
-                int c = 232 + rng.Next(6);
-                for (int j = 0; j < len; j++)
-                {
-                    int x = (x0 + j) % w;
-                    px[y0 * w + x] = new Color32((byte)c, (byte)(c - 2), (byte)(c - 14), 255);
-                }
-            }
-            tex.SetPixels32(px);
-            tex.Apply();
-            _paperTex = tex;
-            return tex;
-        }
-
-        private static Sprite _paperSprite;
-
-        private static Sprite PaperSprite()
-        {
-            if (_paperSprite == null)
-                _paperSprite = Sprite.Create(PaperTex(), new Rect(0, 0, 128, 128), new Vector2(0.5f, 0.5f), 64f);
-            return _paperSprite;
-        }
-
-        private static Sprite _ringSprite;
-
-        /// <summary>印章圆环（白填色，由 Image 染成朱砂）。</summary>
-        private static Sprite RingSprite()
-        {
-            if (_ringSprite != null) return _ringSprite;
-            const int size = 96;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-            float c = (size - 1) / 2f;
-            float r0 = size / 2f - 8.5f, r1 = size / 2f - 3f;
-            for (int y = 0; y < size; y++)
-                for (int x = 0; x < size; x++)
-                {
-                    float d = Vector2.Distance(new Vector2(x, y), new Vector2(c, c));
-                    float a = Mathf.Clamp01(Mathf.Min(d - r0, r1 - d) + 0.5f);
-                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, a));
-                }
-            tex.Apply();
-            _ringSprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f));
-            return _ringSprite;
-        }
-
-        private static Sprite _tornSprite;
-
-        /// <summary>报纸剪报撕边：底缘不规则（白填色，染纸色）。</summary>
-        private static Sprite TornSprite()
-        {
-            if (_tornSprite != null) return _tornSprite;
-            const int w = 96, h = 20;
-            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
-            tex.wrapMode = TextureWrapMode.Repeat;
-            var rng = new System.Random(41);
-            for (int x = 0; x < w; x++)
-            {
-                int jag = 2 + rng.Next(7);
-                for (int y = 0; y < h; y++)
-                    tex.SetPixel(x, y, new Color(1f, 1f, 1f, y < jag ? 0f : 1f));
-            }
-            tex.Apply();
-            _tornSprite = Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f));
-            return _tornSprite;
-        }
+        private static Sprite PaperSprite() => DeskSurface.PaperSprite();
+        private static Sprite WoodSprite() => DeskSurface.WoodSprite();
+        private static Sprite LampGlowSprite() => DeskSurface.LampGlowSprite();
+        private static Sprite RingSprite() => DeskSurface.RingSprite();
+        private static Sprite TornSprite() => DeskSurface.TornSprite();
 
         private static Sprite ButtonSprite()
         {
@@ -400,6 +318,10 @@ namespace Starstate.Ui
             pimg.type = Image.Type.Sliced;
             pimg.color = Color.white;
             mainCardRect = panel.GetComponent<RectTransform>();
+            // 桌面阴影：公文浮在木纹上
+            var psh = panel.AddComponent<Shadow>();
+            psh.effectColor = new Color(0f, 0f, 0f, 0.35f);
+            psh.effectDistance = new Vector2(3, -4);
 
             // 标题带：左侧红色公文侧标 + 浅底（事件态时整带切换为红头文头）
             var titleBand = NewGo("TitleBand", panel.transform);
@@ -422,7 +344,7 @@ namespace Starstate.Ui
 
             // 红头文头：局名（朱红居中）+ 文号（灰）
             docOrg = NewText(titleBand.transform, "DocOrg", 16, Accent, TextAnchor.MiddleCenter);
-            docOrg.text = "长安市发展和改革局";
+            docOrg.text = "大同市人民政府";
             docOrg.fontStyle = FontStyle.Bold;
             Stretch(docOrg.rectTransform, new Vector2(0, 0.42f), new Vector2(1, 1), new Vector2(0, 2), new Vector2(0, -2));
             docOrg.gameObject.SetActive(false);
@@ -505,6 +427,9 @@ namespace Starstate.Ui
             pimg.sprite = CardSprite();
             pimg.type = Image.Type.Sliced;
             pimg.color = FromHex(PaperWarm);
+            var ssh = panel.AddComponent<Shadow>();
+            ssh.effectColor = new Color(0f, 0f, 0f, 0.28f);
+            ssh.effectDistance = new Vector2(2, -3);
 
             var tabRow = NewGo("TabRow", panel.transform);
             Stretch(tabRow.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1),
@@ -523,7 +448,7 @@ namespace Starstate.Ui
                 int captured = i;
                 var b = MakeButton(tabRow.transform, tab, 13, false);
                 var le = b.GetComponent<LayoutElement>();
-                le.preferredWidth = 49;
+                le.preferredWidth = 40;
                 le.preferredHeight = 28;
                 b.onClick.AddListener(() => { if (OnTabSwitched != null) OnTabSwitched(tab); });
                 tabButtons.Add(b);
@@ -585,6 +510,7 @@ namespace Starstate.Ui
                 case "职业": AddTextBlock(sideContent, TextBuilders.CareerPanel(st), 14, Ink); break;
                 case "档案": AddTextBlock(sideContent, TextBuilders.Records(st), 14, Ink); break;
                 case "人物": BuildNpcWidgets(st); break;
+                case "口径": BuildRulebookWidgets(st); break;
                 case "日志": AddTextBlock(sideContent, TextBuilders.LogPanel(st), 14, Ink); break;
             }
 
@@ -608,6 +534,113 @@ namespace Starstate.Ui
             if (sideScroll == null) yield break;
             Canvas.ForceUpdateCanvases();
             sideScroll.verticalNormalizedPosition = 1f;
+        }
+
+        // ---------------- 口径手册（RulebookPanel） ----------------
+
+        private string ruleQuery = "";
+
+        private void BuildRulebookWidgets(GameState st)
+        {
+            var head = AddTextBlock(sideContent, "—— 口径手册 ——", 12, InkSoft);
+            head.fontStyle = FontStyle.Bold;
+
+            // 检索（浅色纸面输入）
+            var searchRow = NewGo("RuleSearch", sideContent);
+            var sle = searchRow.AddComponent<LayoutElement>();
+            sle.preferredHeight = 34;
+            var simg = searchRow.AddComponent<Image>();
+            simg.sprite = CardSprite();
+            simg.type = Image.Type.Sliced;
+            simg.color = FromHex("#FFFDF6");
+            var sfield = searchRow.AddComponent<InputField>();
+            sfield.characterLimit = 24;
+            var stxtGo = NewGo("Text", searchRow.transform);
+            Stretch(stxtGo.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
+            var stxt = stxtGo.AddComponent<Text>();
+            stxt.font = font; stxt.fontSize = S(13); stxt.color = FromHex(Ink);
+            stxt.alignment = TextAnchor.MiddleLeft;
+            stxt.text = ruleQuery ?? "";
+            sfield.textComponent = stxt;
+            var sphGo = NewGo("Placeholder", searchRow.transform);
+            Stretch(sphGo.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
+            var sph = sphGo.AddComponent<Text>();
+            sph.font = font; sph.fontSize = S(12); sph.color = FromHex("#8F8368");
+            sph.alignment = TextAnchor.MiddleLeft;
+            sph.text = "检索：数字 / 算法 / 土地…";
+            sfield.placeholder = sph;
+            sfield.text = ruleQuery ?? "";
+            sfield.onEndEdit.AddListener(v =>
+            {
+                ruleQuery = v ?? "";
+                if (lastSt != null) RenderSide("口径", lastSt);
+            });
+
+            string openTitle = string.IsNullOrEmpty(st.openRule) ? "（未摊开）" : Rulebook.Title(st.openRule);
+            AddTextBlock(sideContent, "摊开：" + openTitle, 13, string.IsNullOrEmpty(st.openRule) ? InkSoft : Accent);
+            int deskN = st.deskRules != null ? st.deskRules.Count : 0;
+            AddTextBlock(sideContent, $"案头 {deskN}/{Rulebook.DeskSlots} · 档案 {st.knownRules.Count} 条（新件会顶掉最旧）", 11, InkSoft);
+
+            // 案头槽位
+            if (deskN > 0)
+            {
+                var deskHead = AddTextBlock(sideContent, "—— 案头 ——", 11, InkSoft);
+                deskHead.fontStyle = FontStyle.Bold;
+                for (int i = 0; i < st.deskRules.Count; i++)
+                {
+                    string rid = st.deskRules[i];
+                    var def = Rulebook.Get(rid);
+                    if (def == null) continue;
+                    bool isOpen = st.openRule == rid;
+                    var card = BeginSideCard(isOpen ? "▣ " + def.title : def.title);
+                    if (isOpen)
+                    {
+                        var himg = card.GetComponent<Image>();
+                        if (himg != null) himg.color = FromHex("#FFF4E4");
+                        CardInfoRow(card.transform, "类别", def.category + "　" + def.source);
+                        foreach (var line in def.body.Split('\n'))
+                        {
+                            if (string.IsNullOrEmpty(line.Trim())) continue;
+                            var t = AddTextBlock(card.transform, line.Trim(), 12, Ink);
+                            t.lineSpacing = 1.2f;
+                        }
+                        var close = MakeButton(card.transform, "收 起", 12, false);
+                        close.GetComponent<LayoutElement>().preferredHeight = 28;
+                        close.onClick.AddListener(() => { if (OnRuleOpen != null) OnRuleOpen(""); });
+                    }
+                    else
+                    {
+                        string ridCap = rid;
+                        var open = MakeButton(card.transform, "摊 开", 12, true);
+                        open.GetComponent<LayoutElement>().preferredHeight = 28;
+                        open.onClick.AddListener(() => { if (OnRuleOpen != null) OnRuleOpen(ridCap); });
+                    }
+                }
+            }
+
+            // 档案（可检索；含未上案头的）
+            var archHead = AddTextBlock(sideContent, "—— 档案 ——", 11, InkSoft);
+            archHead.fontStyle = FontStyle.Bold;
+            var matches = Rulebook.Search(st, ruleQuery);
+            int shown = 0;
+            foreach (var rid in matches)
+            {
+                if (Rulebook.OnDesk(st, rid)) continue; // 案头已列
+                var def = Rulebook.Get(rid);
+                if (def == null) continue;
+                shown++;
+                var card = BeginSideCard(def.title);
+                CardInfoRow(card.transform, "类别", def.category);
+                CardInfoRow(card.transform, "出处", def.source.Length > 28 ? def.source.Substring(0, 28) + "…" : def.source);
+                string ridCap2 = rid;
+                var pull = MakeButton(card.transform, "上 案 头", 12, true);
+                pull.GetComponent<LayoutElement>().preferredHeight = 28;
+                pull.onClick.AddListener(() => { if (OnRuleOpen != null) OnRuleOpen(ridCap2); });
+            }
+            if (shown == 0 && st.knownRules.Count > 0)
+                AddTextBlock(sideContent, string.IsNullOrEmpty(ruleQuery) ? "（档案里暂无未上案头的条目）" : "（无匹配：试试「数字」「算法」「土地」）", 12, InkSoft);
+            if (st.knownRules.Count == 0)
+                AddTextBlock(sideContent, "（办公厅尚未送达口径。查出问题或剧情推进会补授。）", 13, InkSoft);
         }
 
         // ---------------- 状态页：信息行 + 真进度条 ----------------
@@ -803,59 +836,78 @@ namespace Starstate.Ui
         {
             var p = st.player;
             int age = GameClock.Parse(st.date).Year - p.birthYear;
+            int pending = st.pendingDossierIds.Count + (st.activeDossier != null && !st.activeDossier.resolved ? 1 : 0);
 
-            var c1 = BeginSideCard("基本信息");
+            // 任职（市长案头，去掉科员字段）
+            var c1 = BeginSideCard("任职");
             CardInfoRow(c1.transform, "姓名", p.name + " · " + age + "岁");
-            CardInfoRow(c1.transform, "母校", p.school);
-            CardInfoRow(c1.transform, "专业", p.major);
+            CardInfoRow(c1.transform, "职务", p.post);
+            CardInfoRow(c1.transform, "品级", p.rank);
             CardInfoRow(c1.transform, "单位", p.unit);
-            CardInfoRow(c1.transform, "岗位", p.post + " · " + p.rank);
-            if (p.probationMonths < 12) CardInfoRow(c1.transform, "试用期", p.probationMonths + " / 12 个月");
-            CardInfoRow(c1.transform, "住房", st.housing);
-            string fam = st.hasChild ? "已婚有孩" : st.married ? "已婚"
-                : string.IsNullOrEmpty(st.partner) ? "单身" : "与" + st.partner + "恋爱中";
-            CardInfoRow(c1.transform, "家庭", fam);
+            CardInfoRow(c1.transform, "本届起任", st.gradeSince);
+            if (!string.IsNullOrEmpty(st.route)) CardInfoRow(c1.transform, "主攻", st.route);
+            CardInfoRow(c1.transform, "案头待办", pending + " 件卷宗");
+            string openRb = string.IsNullOrEmpty(st.openRule) ? "未摊开" : Rulebook.Title(st.openRule);
+            CardInfoRow(c1.transform, "案头口径", openRb.Length > 18 ? openRb.Substring(0, 18) + "…" : openRb);
 
-            var c2 = BeginSideCard("能力");
-            CardBarRow(c2.transform, "专业", p.attrs.professional, "#4E6E8E");
-            CardBarRow(c2.transform, "行政", p.attrs.admin, "#4E6E8E");
-            CardBarRow(c2.transform, "执行", p.attrs.exec, "#4E6E8E");
-            CardBarRow(c2.transform, "沟通", p.attrs.comm, "#4E6E8E");
-            CardBarRow(c2.transform, "政治敏感", p.attrs.political, "#4E6E8E");
+            // 两把尺：年度考核与巡视底稿的主尺
+            var c2 = BeginSideCard("两把尺");
+            CardBarRow(c2.transform, "合规", st.compliance, st.compliance >= 70 ? "#5E8C6A" : st.compliance >= 50 ? "#C29B3C" : "#B0563F");
+            CardBarRow(c2.transform, "效率", st.efficiency, st.efficiency >= 60 ? "#4E6E8E" : st.efficiency >= 45 ? "#C29B3C" : "#B0563F");
+            CardInfoRow(c2.transform, "本年程序问题", st.yearIntegrity + " 次");
+            CardInfoRow(c2.transform, "累计违规", st.violationCount + " 次");
 
-            var c3 = BeginSideCard("身心");
-            CardBarRow(c3.transform, "精力", p.energy, "#5E8C6A");
-            CardBarRow(c3.transform, "压力", p.stress, "#B0563F");
-            CardBarRow(c3.transform, "士气", p.morale, "#C29B3C");
+            // 常委会权力地形（PowerBoard 雏形）
+            var c3 = BeginSideCard("常委会 · 权力地形");
+            string[] seats = { "cen", "han", "shenyan", "shao", "zhoujin" };
+            string[] seatRoles = { "主席", "组织", "纪委", "常务副", "办公厅" };
+            for (int i = 0; i < seats.Length; i++)
+            {
+                var r = Npcs.Get(st, seats[i]);
+                string nm = Npcs.Name(seats[i]);
+                string col = r.trust >= 25 ? "#5E8C6A" : r.trust <= -20 ? "#B0563F" : "#6B6052";
+                CardInfoRow(c3.transform, seatRoles[i], nm + "　信任 " + (r.trust >= 0 ? "+" : "") + r.trust);
+                // 将值文本染成冷热色（最后一行的 V 字段）
+                int lastIdx = c3.transform.childCount - 1;
+                var row = c3.transform.GetChild(lastIdx);
+                foreach (var t in row.GetComponentsInChildren<Text>())
+                {
+                    if (t.gameObject.name == "V") t.color = FromHex(col);
+                }
+            }
 
-            var c4 = BeginSideCard("资源");
-            CardInfoRow(c4.transform, "社会声望", p.reputation.ToString());
-            CardInfoRow(c4.transform, "政治资本", p.polCapital.ToString());
-            CardInfoRow(c4.transform, "积蓄", p.savings + " 元");
-            CardInfoRow(c4.transform, "月结余", (p.monthlyIn - p.monthlyOut) + " 元");
+            // 身心
+            var c4 = BeginSideCard("身心");
+            CardBarRow(c4.transform, "精力", p.energy, "#5E8C6A");
+            CardBarRow(c4.transform, "压力", p.stress, "#B0563F");
+            CardBarRow(c4.transform, "士气", p.morale, "#C29B3C");
 
-            // 同批竞争者
-            var c5 = BeginSideCard("同批");
+            // 资源与家庭
+            var c5 = BeginSideCard("资源");
+            CardInfoRow(c5.transform, "社会声望", p.reputation.ToString());
+            CardInfoRow(c5.transform, "政治资本", p.polCapital.ToString());
+            CardInfoRow(c5.transform, "积蓄", p.savings + " 元");
+            CardInfoRow(c5.transform, "月结余", (p.monthlyIn - p.monthlyOut) + " 元");
+            string fam = st.hasChild ? "已婚有孩" : st.married ? "已婚" : (string.IsNullOrEmpty(st.partner) ? "—" : st.partner);
+            CardInfoRow(c5.transform, "家庭", fam + "　" + st.housing);
+
+            // 同批竞争（许飞线仍在跑）
+            var c6 = BeginSideCard("同批");
             string rname = Npcs.Name(st.rival.id);
-            CardInfoRow(c5.transform, rname + "势头", st.rival.progress + " / 100");
-            if (st.rival.stage > 0) CardInfoRow(c5.transform, "里程碑", "阶段 " + st.rival.stage);
-            string yearRival = "";
-            var yd = GameClock.Parse(st.date);
-            if (ContentRegistry.Years.ContainsKey(yd.Year)) yearRival = ContentRegistry.Years[yd.Year].rival;
-            if (!string.IsNullOrEmpty(yearRival) && yearRival.Length > 36) yearRival = yearRival.Substring(0, 36) + "…";
-            if (!string.IsNullOrEmpty(yearRival)) CardInfoRow(c5.transform, "风声", yearRival);
+            CardInfoRow(c6.transform, rname + "势头", st.rival.progress + " / 100");
+            if (st.rival.stage > 0) CardInfoRow(c6.transform, "里程碑", "阶段 " + st.rival.stage);
 
             // 常驻时钟仪表
             if (st.clocks != null && st.clocks.Count > 0)
             {
-                var c6 = BeginSideCard("时钟");
+                var c7 = BeginSideCard("时钟");
                 foreach (var c in st.clocks)
                 {
                     if (c == null || c.max <= 0) continue;
                     int pct = Mathf.Clamp(Mathf.RoundToInt(c.value * 100f / c.max), 0, 100);
                     string color = c.kind == "threat" ? "#B0563F" : "#5E8C6A";
                     string label = string.IsNullOrEmpty(c.label) ? c.id : c.label;
-                    CardBarRow(c6.transform, label, pct, color);
+                    CardBarRow(c7.transform, label, pct, color);
                 }
             }
         }
@@ -1045,7 +1097,7 @@ namespace Starstate.Ui
 
             var sub = NewText(menuPanel.transform, "MenuSub", 17, "#B7AA8C", TextAnchor.MiddleCenter);
             Top(sub.rectTransform, 0, -182, 700, 28);
-            sub.text = "政府职业成长 · 十年完整版（2026—2036）";
+            sub.text = "七品·大同市市长 · 卷宗签批 · 2026—2036";
             subRect = sub.rectTransform;
 
             nameInput = MakeInput(menuPanel.transform, new Vector2(0, -252));
@@ -1064,7 +1116,7 @@ namespace Starstate.Ui
             vrt.pivot = new Vector2(1, 0);
             vrt.anchoredPosition = new Vector2(-14, 10);
             vrt.sizeDelta = new Vector2(300, 20);
-            ver.text = "STARSTATE v0.1 Preview";
+            ver.text = "STARSTATE v0.2.6 Preview";
         }
 
         public void ShowMenu(bool hasSave)
@@ -1644,20 +1696,21 @@ namespace Starstate.Ui
                 StartCoroutine(Tween.Delayed(0.10f + i * 0.05f, OptionInCo(cg, tr)));
             }
 
-            // 印章：结果核阅 / 月结核毕 / 结局归档
+            // 印章：结果核阅 / 月结核毕 / 结局归档 / 卷宗签批
             string stampText = null;
             if (scene.kind == "result") stampText = "已阅";
             else if (scene.kind == "month_end") stampText = "核毕";
             else if (scene.kind == "ending") stampText = "归档";
+            else if (scene.kind == "dossier") stampText = "签批";
             if (stampText != null && mainCardRect != null) BuildStamp(stampText);
         }
 
-        // ---------------- 周计划编辑器（Phase 4） ----------------
+        // ---------------- 周计划编辑器（Phase 4 / P5 改语义） ----------------
 
-        private static readonly string[] PlanSlotNames = { "岗位工作", "学习充电", "经营人际", "家庭生活", "休整调整" };
+        private static readonly string[] PlanSlotNames = { "签批专注", "调研摸底", "会商协调", "关系走动", "家庭休整" };
         private static readonly string[] PlanSlotHints =
         {
-            "任务评级更稳", "专业成长更快", "关系与眼力", "士气与家里", "精力回血·压力↓"
+            "当日可多办一件·核对更稳", "问题发现率↑", "协调与会签更顺", "常委与局长关系", "精力回血·压力↓"
         };
 
         private void BuildPlanEditor(Transform parent, int[] plan)

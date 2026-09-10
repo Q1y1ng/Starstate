@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Starstate.Core
 {
-    /// <summary>人物定义表与关系系统。M0 默认阵容（FOUNDATION_REPORT §7.8），姓名细节为设计草案。</summary>
+    /// <summary>人物定义表与关系系统。Phase 5：市级权力地形（常委会 11 席核心＋家庭）。</summary>
     public static class Npcs
     {
         public class Def
@@ -13,45 +13,59 @@ namespace Starstate.Core
 
         public static readonly Dictionary<string, Def> Defs = new Dictionary<string, Def>
         {
-            ["zhou"] = new Def {
-                name = "周衡之", title = "综合科科长", grade = "吏一·正科", age = 45,
-                traits = "严谨、护短",
-                desc = "材料出身的老机关，在这层楼待了二十年。嘴上厉害，笔下护人，最恨数据口径出岔子。" },
-            ["lin"] = new Def {
-                name = "林晚", title = "综合科副科长", grade = "吏二·副科", age = 33,
-                traits = "业务能手、温和",
-                desc = "全局有名的笔杆子，写材料讲究“分寸”二字。对新人不藏私，但也不替人扛活。" },
-            ["zhao"] = new Def {
-                name = "赵桂芳（赵姐）", title = "综合科科员", grade = "吏三·科员（老科员）", age = 52,
-                traits = "热心、通透",
-                desc = "干了三十年科员，明年在退休线上了。科里的活字典，谁的茶杯放在哪她都知道。" },
-            ["ma"] = new Def {
-                name = "马建国（马副局长）", title = "副局长（分管综合科）", grade = "九品·正处", age = 49,
-                traits = "威严、务实",
-                desc = "开会是“我简单说两句”能说四十分钟的人。记性极好，谁的材料好他心里有账。" },
-            ["ren"] = new Def {
-                name = "任雪梅（任姐）", title = "人事科干部", grade = "吏二·副科", age = 41,
-                traits = "流程通、口风紧",
-                desc = "全员的档案都从她手里过。她笑的时候在办事，她不笑的时候也在办事。" },
+            ["cen"] = new Def {
+                name = "岑伯衡", title = "市人民政治委员会常务委员会主席", grade = "七品·正厅", age = 54,
+                traits = "沉稳、护盘、记仇",
+                desc = "大同政治口的定盘星。说话慢，批人准。最烦年轻干部“不讲程序的聪明”。" },
+            ["han"] = new Def {
+                name = "韩清", title = "市委组织部部长（常委会副主席）", grade = "七品·正厅", age = 50,
+                traits = "精密、中立、档案癖",
+                desc = "管档案的人。谁的履历干净、谁的特批过多，她比当事人还清楚。" },
+            ["shenyan"] = new Def {
+                name = "沈砚", title = "市纪委（监委）主持工作的领导", grade = "七品·正厅", age = 52,
+                traits = "冷、程序正义",
+                desc = "同姓不同宗。他手里的线索不响，响的时候已经晚了。可盟可敌，取决于你桌上的卷宗干不干净。" },
+            ["shao"] = new Def {
+                name = "邵志远", title = "市委常委、常务副市长", grade = "八品·副厅", age = 49,
+                traits = "能干、分权、好名",
+                desc = "抓落实的一把好手，也爱把功劳先写进自己的纪要里。搭档还是对手，看季度。" },
+            ["zhoujin"] = new Def {
+                name = "周谨", title = "市政府办公厅主任（常委会委员）", grade = "八品·副厅", age = 46,
+                traits = "闸门、周到、嘴严",
+                desc = "决定你桌上先出现哪一份文件的人。挡驾与放行，都是艺术。" },
             ["xu"] = new Def {
-                name = "许飞", title = "发展规划科科员（同批新人）", grade = "吏三·科员", age = 24,
-                traits = "外向、好胜",
-                desc = "同批笔试第一名，逢人便提。目标明确：三年内让分管副局长记住全名。" },
-            ["su"] = new Def {
-                name = "苏晴", title = "固定资产投资科科员（同批新人）", grade = "吏三·科员", age = 23,
-                traits = "踏实、细心",
-                desc = "话不多，台账做得比老科员还齐整。你入职那天她帮你搬的箱子。" },
-            ["he"] = new Def {
-                name = "何斌", title = "产业发展科科员（同批新人）", grade = "吏三·科员", age = 25,
-                traits = "圆滑、消息灵通",
-                desc = "入职两周已能报出全局领导的籍贯。消息来源成谜，本人乐于此道。" },
-            ["tong"] = new Def {
-                name = "童远", title = "市统计局综合科科员", grade = "吏三·科员", age = 26,
-                traits = "直爽、口径活字典",
-                desc = "兄弟部门的同龄人。全长安最清楚“规上规下、当月累计”区别的人之一，且乐于科普。" },
+                name = "许飞", title = "邻市市长（同批竞争者）", grade = "七品·正厅", age = 42,
+                traits = "锐、快、爱比较",
+                desc = "你们同一年过帝国考试。他把“比你早进六品”写在每一次调研的路线选择里。" },
+            ["laokang"] = new Def {
+                name = "康慎行（老康）", title = "退居二线的老同志、前任班子成员", grade = "七品·正厅（退休待遇）", age = 67,
+                traits = "通透、书信",
+                desc = "写得一手好字。退了仍有人找他递话。他的信，比文件难批。" },
+            ["linwan"] = new Def {
+                name = "林晚", title = "市属国企中层（配偶）", grade = "吏一·正科", age = 40,
+                traits = "清醒、克制",
+                desc = "她比你更怕“打招呼”三个字。家里那盏灯，是你签批之外的另一套审查。" },
+            ["fang"] = new Def {
+                name = "方启年", title = "市财政局局长", grade = "九品·正处", age = 48,
+                traits = "算盘精、怕事",
+                desc = "数字从他手里过一遍会变薄。你要真数，得亲自去局里坐。" },
+            ["rensheng"] = new Def {
+                name = "任慎", title = "市自然资源局局长", grade = "九品·正处", age = 51,
+                traits = "土地、话少",
+                desc = "批地的章在他抽屉里。开发商叫他任叔，他叫开发商“企业朋友”。" },
+            // —— 旧科员阵容保留定义，供迁移内容/回响引用 ——
+            ["zhou"] = new Def {
+                name = "周衡之", title = "（旧线）综合科科长", grade = "吏一·正科", age = 45,
+                traits = "严谨、护短", desc = "旧职业线人物。" },
+            ["lin"] = new Def {
+                name = "林晚（旧线）", title = "（旧线）", grade = "吏二·副科", age = 33,
+                traits = "—", desc = "与配偶同名占位，迁移时废弃。" },
         };
 
-        public static readonly string[] Order = { "zhou", "lin", "zhao", "ma", "ren", "xu", "su", "he", "tong" };
+        public static readonly string[] Order =
+        {
+            "cen", "han", "shenyan", "shao", "zhoujin", "xu", "laokang", "linwan", "fang", "rensheng",
+        };
 
         public static string Name(string id) => Defs.ContainsKey(id) ? Defs[id].name : id;
         public static string Title(string id) => Defs.ContainsKey(id) ? Defs[id].title : "";
@@ -81,7 +95,6 @@ namespace Starstate.Core
             r.evalv = Clamp(r.evalv + d.evalv, -100, 100);
             if (!string.IsNullOrEmpty(d.memo))
                 r.memories.Add(new MemoryEntry { date = st.date, text = d.memo });
-            // 记忆上限：只留最近 8 条（提示词取最后一条、UI 显示最后一条，裁剪无感）
             if (r.memories.Count > 8) r.memories.RemoveRange(0, r.memories.Count - 8);
         }
 

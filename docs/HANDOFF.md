@@ -1,160 +1,136 @@
 # STARSTATE 开发交接手册（HANDOFF）
 
-> **给新接手的 Agent**：先读 [AGENTS.md](../AGENTS.md)（项目共识与纪律），再读本文（怎么干活）。历史决策查 [changelog/](../changelog/)，设计逻辑查 [docs/PHASE4-DESIGN.md](PHASE4-DESIGN.md)。目标：**30 分钟内安全提交第一处改动**。
-> 最后更新：2026-09-06（Phase 4 收口后）。
+> **给新接手的 Agent**：先读 [AGENTS.md](../AGENTS.md)，再读本文。Phase 5 规格：[papers-desk-overhaul.md](compose/spec/papers-desk-overhaul.md)。历史：[changelog/](../changelog/)。
+> 最后更新：2026-09-10（Phase 5 · v0.2.3 市长办公桌）。
 
 ---
 
 ## 1. 项目一句话与当前状态
 
-政府职业成长模拟游戏：架空世界"中华帝国"（设定以 `E:\AI\帝国\设定\` 为唯一事实来源，**只读**），玩家 23 岁入职长安市发展和改革局，2026-2036 十年科员→（转官）十品副处。
+社会人生模拟：架空「中华帝国」（设定 `E:\AI\帝国\设定\` **只读**）。**当前玩法：七品·大同市市长沈砚舟（41 岁）卷宗签批**——翻页→核对→处置；两把尺（合规×效率）；常委会权力地形；口径手册（案头 4 槽）。Phase 1–4 科员十年线在仓库（吏轨 API 留桩，内容未注册）。
 
 | 项 | 状态 |
 | --- | --- |
-| Phase 1-4 | 全部完成；Phase 4 = 回响引擎＋周计划＋档案公文美学＋内容大填充（2026-09-06） |
-| 测试 | EditMode **22/22** 全绿；独立编译四程序集零错误（`tools/check-compile.sh`） |
-| 存档 | JsonUtility，**saveVersion 4**（GameApp.SaveVersion 门槛，旧档引导重开） |
-| 规模 | 37 个 C# 文件 / 约 11000 行；151 处事件注册（运行时唯一事件 130+）；任务模板 50；新闻 118；LLM 增强层（本地 llama-server 标定参数 / 外部 OpenAI 兼容） |
+| Phase 1-4 | 完成（2026-09-06） |
+| Phase 5 | M0＋v0.2.x：卷宗引擎/七品开局/木纹桌面/口径/模板池/常委密谈/两条链（2026-09-10） |
+| 测试 | EditMode **30 Passed / 0 Failed / 5 Skipped**（跳过=旧 ContentClockRival） |
+| 存档 | **saveVersion 5**；旧档引导重开 |
+| 编译 | `tools/check-compile.sh` → ALL_OK |
 
-## 2. 代码地图（E:\Starstate\game-src\Assets\Scripts\，改这里再同步到 game\）
+## 2. 代码地图（改 `game-src/` 再同步 `game/`）
 
-### Core/（纯 C#，无 UnityEngine 依赖——保持！）
-
-| 文件 | 职责 | 接手须知 |
-| --- | --- | --- |
-| `Flow.cs` | 引擎心脏：事件调度、场景状态机、效果结算、周月节奏、快进、动态事件（人事/考核/结局/NPC 主动） | 改调度逻辑前先读 §6 坑清单；`CollectDue` 是每日事件入口 |
-| `Model.cs` | 全部 POCO：GameState/Effects/GameEvent/When/OptionWhen/EchoJob/ClockState/WeekPlanState/RivalState… | JsonUtility 存档：**禁止 Dictionary**；新字段必须给默认值 |
-| `State.cs` | NewGame 工厂（玩家初始属性唯一赋值点） | Attrs 默认值必须为 0（它也是增量容器） |
-| `Career.cs` | 晋升年限/年度考核评定/结局计算＋**结局个人史（AppendMarkEchoes）** | 晋升规则=总设定冻结版，别动数值语义 |
-| `GameClock.cs` | 日历：节假日表（2028 起为【占位推演】）、周/月边界 | |
-| `Npcs.cs` | NPC 定义表＋关系系统（familiar/trust/evalv/memories） | 9 个默认人物 |
-| `Systems.cs` | `Clocks`（时钟仪表）＋`NpcTick`（每周淡忘/主动找你） | 时钟满格触发由 Flow.CheckClocks 完成 |
-| `TaskGenerator.cs` | 50 个任务模板 × **五种决策骨架**（例行/限时/协作/风险/露脸） | 模板只管主题，骨架提供选项结构 |
-| `Llm.cs` | LLM 全部 Core 侧：LlmPrompt（JSON schema 与【纯文本】协议）、MiniJson、LlmJson 容错解析、LlmGameplay 白名单效果 | AI 只产文本，数值效果必须走白名单 |
-| `Content*.cs` | 内容数据（见 §4 配方）；`ContentRegistry.RegisterAll` 是唯一注册入口 | ContentChains=剧情链，ContentMonthly=月度十二节律；**ContentClocks=常驻时钟**；**ContentRival=同批里程碑** |
-
-### Ui/（UGUI 全代码构建，零美术资产）
+### Core/（纯 C#，禁 UnityEngine）
 
 | 文件 | 职责 | 接手须知 |
 | --- | --- | --- |
-| `GameApp.cs` | 组合根＋页面数据流＋存档＋LLM 编排；`GameBootstrap` 运行时自举 | Boot 场景**零脚本**是纪律；**存档管线=主线程序列化＋线程池原子落盘（WriteSaveAtomic）**，新增写盘一律走它；字体静态缓存 |
-| `UiRoot.cs` | 约 2000 行全部 UI：主题色/程序纹理/红头文件/印章/剪报/履历卡/台历/周计划编辑器/设置/交谈/引导 | `Build(font, docFont, scale)` 整树重建是换肤管线；**RenderMain 有场景签名去重**（同签名跳过重建）——改重建逻辑时注意 `lastSceneSig` 重置时机；周计划 ± 走 `UpdatePlanEditor` 局部刷新 |
-| `LlamaServer.cs` | llama-server 生命周期＋**标定启动参数**（ngl28+KV q4_0+ub128+fa+t16 绑核，降级阶梯兜底） | 参数有实测依据（changelog/PHASE-4 补丁十），别随手改；Kill 含 Dispose |
-| `LlmClient.cs` | HTTP（UnityWebRequest）；`Chat` 与 **`ChatStream`（SSE 流式）**；取消谓词 | 流式失败会回退整包解析 |
-| `Tween.cs` / `ButtonFx.cs` / `TextBuilders.cs` / `SoundFx.cs` | 补间库 / 按钮微反馈 / 纯字符串面板文本 / 程序合成音效 | 协程入口必须判空（销毁竞态） |
+| `DossierEngine.cs` | 登记/周分配/翻页/核对/签批/两把尺 | `Begin` 只 `ClearRuntime()`，**不要** `Clear()` 注册表 |
+| `Rulebook.cs` | 案头 4 槽顶旧、检索、DeskHint | `knownRules` vs `deskRules` |
+| `ContentDossierM0/Y1` | 教学3＋高光3＋池＋季节件 | 高光 marks 驱动链 |
+| `ContentChainsMayor` | 对上报告 / 算法审批 | `requireMarks` 是 **AND**，分叉拆事件 id |
+| `DossierGenerator` | 14 模板×变量，`SeedPool(36)` | id=`dz_g{seq}_{MMdd}` 唯一 |
+| `ContentRulebook` | 6 条口径 | issue.ruleKey |
+| `ContentNpcTalk` | 常委台词＋回退选项 | 无 AI 可玩 |
+| `ContentPrologueMayor` | 序章三幕 | |
+| `ContentCareerMayor` | 年度考核/结局 | |
+| `Flow.cs` | 事件优先于卷宗；`DossierScene` 眉/铅笔痕/DeskHint | `dayFfable` 含 `queue.Count==0` |
+| `Model.cs` | GameState 卷宗/口径/两把尺 | saveVersion 5；**禁 Dictionary** |
+| `State.cs` | 七品 NewGame＋授 3 口径 | |
+| `Career.cs` | 七品→六品双尺考核 | 旧吏轨留桩 |
+| `Llm.cs` | 市长层提示词；周评=周谨 | 效果白名单 |
+| `Npcs.cs` | 常委会权力地形 | |
+| `ContentRegistry.cs` | 唯一注册入口 | 科员线暂不注册 |
 
-### Tests/（EditMode，NUnit）
-`FlowSmokeTest`（序章九月）· `TenYearSmokeTest`（十年自动通关——**任何引擎改动的回归底线**）· `TaskCheckGrades`（在 FlowSmokeTest 内）· `LlmSmokeTest` · `GrowthSmokeTest` · `P4EngineTest`（回响/池不枯竭/锁定/时钟/淡忘）。
+### Ui/
 
-### 数据流（只读视图模式）
-`GameApp.RenderAll → Flow.CurrentScene(st) → Scene{kind,title,paras,options,optionLocks,planValues,docNo} → UiRoot 渲染`；输入：`ui.OnOptionChosen/OnPlanAdjusted/… → GameApp → Flow.Choose/SetPlan`。**Ui 不改状态，Core 不碰 UnityEngine。**
+| 文件 | 职责 |
+| --- | --- |
+| `GameApp.cs` | 组合根；OpenRule；密谈；LLM |
+| `UiRoot.cs` | 木纹/灯晕/7 页签（含**口径**）/权力板/市长状态页 |
+| 其余 | 同 Phase 4（Tween/LlmClient/LlamaServer…） |
 
-## 3. 核心机制速查（改内容前必读）
+### Tests/
+`DossierEngineTest` · `RulebookTest` · `GeneratorPoolTest` · `FlowSmokeTest` · `TenYearSmokeTest` · `BalanceSmokeTest` · `GrowthSmokeTest` · `P4EngineTest` · `LlmSmokeTest`（选项 2–3）。
 
-- **Phase 状态机**：Prologue → WeekPlan（周一）→ Day×4 → WeekEnd（周五例会）→ Weekend → GotoMonday…月末最后工作日 SettleMonth；年度节点=动态事件 `sys_annual_eval`(1/15)、`sys_personnel`(9/20)；2036-08 结局。
-- **每日事件收集**（Flow.CollectDue，按序）：① 回响队列（到期 echo，带 flag/marks 门槛的未达标即耗散）→ ② date 事件 / md 循环事件（+requireMarks） / flag 事件 → ③ 随机池**加权单抽**（0.45/工作日）→ ④ 时钟满格。
-- **marks**（叙事标记，持久化）：`Effects.setMarks/clearMarks` 写；`When.requireMarks/requireNotMarks`（事件级）与 `OptionWhen.mark/notMark`（选项级）读；结局个人史消费。这是"选择的长影子"的载体。
-- **回响（Echo）**：`Effects.echoes=[{eventId,afterDays}]`；回响事件 `when=null`（或带门槛做条件回响）。
-- **随机池**：`randomP>0` 入池；`weight` 权重、`maxFires`（默认 1=一生一次）、`cooldownDays`、`ambition` 门槛。**池永不枯竭**（有测试保证）。
-- **选项双轨门槛**：结构性（grade/route/flag/notFlag/年限/优秀次数/基层月数）不满足→**隐藏**；叙事性（mark/notMark/relNpc+minFamiliar/minTrust）不满足→**锁定可见**（Scene.optionLocks 给原因，UI 自动置灰）。
-- **周计划**：100 点精力五槽位（岗位/学习/人际/家庭/休整）；结算=`Flow.PlanGrowth`（例会与快进静默周共用）；岗位投入→`TaskCheck` +plan.work×0.1 评级加成；快进=AutoPlan 沿用上周计划。
-- **任务五骨架**：TaskGenerator.BuildByKind 按 55/15/12/10/8 抽签，同一模板主题套不同决策结构。
-- **结局个人史**：`Career.AppendMarkEchoes` 按 marks 装配"十年回响"段——加新链时记得在这里补一行。
-- **LLM 协议**：JSON 任务走 `LlmJson.ExtractFirstJson` 容错解析；纯文本任务在 user prompt 标注【纯文本】；效果一律 LlmGameplay 白名单；任何 AI 失败**静默回退**内置内容。交谈请求带取消谓词（弹层关闭即 Abort 在途请求）。
-- **LLM 启动（补丁十二）**：默认 `autoStart=false`、`ctx=16384`——游戏启动**不**拉 llama-server；首次交谈/测试连接现场唤醒。改默认值必须升 `GameApp.LlmKey` 后缀，否则旧 PlayerPrefs 会盖住新默认。`LlamaServer.starting` 必须在 `Process.Start` 前置位、所有出口复位（防双开）。
-- **存档管线**：`Save()`=主线程序列化（紧凑 JSON）→ 线程池 `WriteSaveAtomic`（临时文件→长度校验→`File.Replace` 原子替换，带写入锁）；`OnDestroy` 同步兜底。**多槽**：slot0=自动档 `starstate_save.json`，slot1–3=`starstate_save_sN.json`；手动槽每次 Save 镜像自动档。**新增持久化写盘一律走 WriteSaveAtomic**。
-- **渲染去重**：`RenderMain` 按场景签名跳过同场景重建（去闪烁/去 GC 尖峰）；周计划 ± 走 `UpdatePlanEditor` 局部刷新，不走 RenderAll。
-- **内存上限**：log 600 条（裁最旧 100）、NPC memories 8 条、poolLog 500 条；任务/材料档案**有意**全量保留（十年工作档案是内容本体）。
+### 数据流
+`RenderAll → Flow.CurrentScene → Scene{kind=dossier|result|week_plan|…} → UiRoot`。
+卷宗选项序：上一页?/下一页?/核对/处置…（`Flow.ChooseDossier`）。
 
-## 4. 常用配方（照抄即可）
+## 3. Phase 5 机制速查
 
-**加一个脚本事件**：在合适的 `Content*.cs` 的 `Register()` 里 `Flow.Register(new GameEvent{ id="ev_xxx", type="work|person|society|politics|oversight|system", title=…, when=new When{ … }, paras={…}, options={…} })`。`When` 四种触发：`date:"2027-05-04"`（一次性）／`md:"05-04",fromYear:2027`（每年）／`flag:"xxx"`（置位次日）／`randomP:0.1`（入池，配 weight/maxFires/cooldownDays）。`when=null`=只由回响/队列触发。**id 全局唯一**；入职前的内容不要给 docNo（引擎已按 phase 判定）。
+- **周一** `AssignWeek`：showcase/deadline 优先，再抽池；budget 默认 5。
+- **核对**：当前页有雷必中；案头口径 → DeskHint；错页 → 提示第 N 页；查出可补授口径。
+- **两把尺**：漏雷照准扣合规（severity×4）；逾期扣效率；进考核与六品门槛。
+- **口径**：`Grant` 入档案+上案头；满 4 顶最旧；`Open` 从档案捞回。
+- **链 marks**：`pressed_report`/`honest_report`；`algo_auto`/`algo_pass`/`algo_veto`。
+- **快进**：静默办结卷宗；队列非空必停。
 
-**加一条剧情链**：触发事件选项 `effects = new Effects{ setMarks={"xxx_m"}, echoes={new EchoSpec{ eventId="ev_xxx_b", afterDays=90 }} }`；回响事件 `when=null`（无条件）或 `when=new When{ flag/mark 门槛 }`（条件回响，未达标耗散）；分支结局用多个同日事件各自 `requireMarks` 不同标记。参考 `ContentChains.RegisterLedgerChain()`（数据造假案三幕）。
+## 4. 工程纪律（强制）
 
-**加任务模板**：`TaskGenerator.Pool` 加 `new Template{ title,note,para,main,routes }`；五骨架自动套用；风险骨架的"口径变通"选项自带程序合规标记——新增模板不要破坏这一结构。
+1. 改 `game-src/` → `robocopy src dst /E /XF *.meta`；**绝不删 `.meta`**。
+2. 门禁：`check-compile.sh` ALL_OK → 同步 → EditMode。
+3. 中文引号 `""`；ASCII `"` 会截断 C# 字符串。
+4. 测试换注册：`DossierEngine.Clear()` + `Rulebook.ClearRegistry()`。
+5. Boot 场景零脚本；`GameBootstrap` 自举。
+6. Effects 走 `CloneEffects`；Attrs 默认 0；存档无 Dictionary。
 
-**加日常/新闻**：日常文案进 `ContentRegistry.GenericDayPools` 四池之一；新闻在 `ContentNewsExtra`（或新文件）里 `News.Add("2031-06-18","国内","标题","正文")` 并在 ContentRegistry 注册你的 Register()。
-
-**加锁定选项**：`when = new OptionWhen{ relNpc="zhou", minTrust=5, mark="xxx_m" }`——UI 自动显示"🔒 需要周衡之的信任（3/5）"并禁点。
-
-**加 LLM 能力**：`LlmPrompt` 加 User 提示词（JSON schema 或【纯文本】）→ GameApp 编排协程 → 失败静默。参考 `WeekReviewUser`＋`RequestWeeklyReview`。
-
-**调数值**：周计划结算 `Flow.PlanGrowth`；任务评级 `Flow.TaskCheck`（阈值 78/65/52/40）；晋升年限 `Career` 常量；体力耗损 `Flow.Drift`。改完必须跑十年回归测试。
-
-## 5. 验证门禁（每个改动都要过，顺序执行）
+## 5. 验证门禁
 
 ```bash
-# ① 独立编译（秒级，四程序集零错误）
-bash E:/Starstate/tools/check-compile.sh          # 期望末行 ALL_OK
+# ① 编译
+"C:\Program Files\Git\bin\bash.exe" E:/Starstate/tools/check-compile.sh
 
-# ② 同步到 Unity 工程（只增改；绝不删除 game/Assets 下任何 .meta）
-cp -r E:/Starstate/game-src/Assets/Scripts/. E:/Starstate/game/Assets/Scripts/
+# ② 同步（PowerShell）
+robocopy E:\Starstate\game-src\Assets\Scripts E:\Starstate\game\Assets\Scripts /E /XF *.meta
 
-# ③ Unity EditMode 测试（数分钟；先确认无残留实例占工程锁）
-wmic process where "name='Unity.exe'" get ProcessId,CommandLine 2>/dev/null | tr -d '\r' | grep -i '\-batchmode'
-#   有输出=先按上面查到的 PID 精确 taskkill（只准杀 -batchmode 实例，绝不准按名字杀 Unity）
-"D:/pro/unity/Editor/Unity.exe" -batchmode -nographics -projectPath E:/Starstate/game \
-  -runTests -testPlatform EditMode -testResults E:/Starstate/tmpbuild/testresults.xml \
-  -logFile E:/Starstate/tmpbuild/testlog.txt
-#   结果 XML 会先写出，进程可能挂起——等通知后直接读 XML；总期望 17/17
-#   目录名别用 .tmpbuild（点开头目录 Unity 拒绝）
+# ③ EditMode（结果 XML 先写出，进程常挂——读 XML；只杀 -batchmode 实例）
+# Unity: D:\pro\unity\Editor\Unity.exe -batchmode -nographics -projectPath E:/Starstate/game
+#   -runTests -testPlatform EditMode -testResults <xml> -logFile <log>
 ```
 
-UI 表现与 LLM 链路自动测不到：Play 模式手测要点——主菜单开新局走完序章（含"你为什么来"）、周一周计划拖拽、事件红头/印章、新闻剪报、人物履历卡、设置页音效；AI 开启时测试连接＋一次交谈。
+Play 手测金路径：新局→序章三幕→周计划→第一周卷宗（摊开口径→翻页→核对→签批）→状态页两把尺/权力板→口径页签检索。
 
-## 6. 坑清单（血泪问题提醒——每一条都真实踩过）
+## 6. 坑清单（真实踩过）
 
-### 工程与同步
-1. **game-src 先改、同步只增改、绝不删除 game/Assets 下的 .meta**（GUID 删了=场景引用断裂"missing script"）。
-2. **Boot 场景零脚本**：入口是 GameBootstrap 的 `[RuntimeInitializeOnLoadMethod(BeforeSceneLoad)]` 自举。不要往场景挂 MonoBehaviour——编辑器脚本重载窗口期保存场景会剥落引用。
-3. 世界观资料 `E:\AI\帝国\设定\` 只读不复制；一切产出放 `E:\Starstate`；需要作者拍板的登记 `docs/OPEN_QUESTIONS.md`（默认方案先行，可否决）。
+### 工程
+1. 绝不删 `game/Assets/**/*.meta`（GUID→missing script）。
+2. Boot 场景零脚本。
+3. 世界观 `E:\AI\帝国\设定\` 只读。
 
 ### Unity 批处理
-4. 结果 XML 先写出、**Unity 进程经常挂起不退**——读 XML 即可，清理只按 `-batchmode` 命令行特征，**绝不按进程名杀 Unity**（用户编辑器可能开着）。
-5. `wmic` 输出带 CRLF：**必须 `tr -d '\r'`** 再 grep/正则，否则静默失配（曾致僵尸实例误判）。
-6. "another instance is running with this project open"=有残留批处理实例占工程锁，先查先杀（同第 4 条纪律）。
-7. 测试输出目录别用点开头名（`.tmpbuild` 会被 Unity 拒绝），用 `tmpbuild`。
+4. 测试 XML 先写出、进程常挂——读 XML；只按 `-batchmode` 特征杀进程，**绝不按名字杀 Unity**。
+5. 输出目录别用点开头名；用 `tmpbuild` 或直接 game/ 下 xml。
 
-### C# / Unity 运行时
-8. **Effects 是注册表共享实例**：Choose 里必须走 `CloneEffects`，否则 rel/morale 跨次执行累积污染（已修，别回退）。
-9. **Attrs 字段默认值必须为 0**（它同时是增量容器）；玩家初始属性只在 `State.NewGame` 赋——违反会复发"五维全 100"。
-10. 存档类（GameState 及嵌套）**不能有 Dictionary**（JsonUtility）；新增字段必须带默认值；`when=null` 的事件进 MarksMet 等判定前要防 null（已修，别回退）。
-11. 内容文本里的引号一律用中文引号""——**ASCII 双引号会截断 C# 字符串**（批量替换/脚本生成内容后必须过编译门禁）。
-12. 布局：HorizontalLayoutGroup 的 childControl 必须 true，否则 LayoutElement.preferred 尺寸不落实（"巨大色块"教训）。
-13. 所有 Tween 协程与延迟回调入口**判空再动**（Delayed 恢复时目标可能已被整树重建销毁 → MissingReferenceException）。
-14. 修改用户存档（调试时）：**临时文件→校验→原子替换**，绝不直接覆写（曾有截断丢档事故）。
+### C#
+6. **Effects 是共享实例**：必须 `CloneEffects`。
+7. Attrs 默认 0；初始值只在 `State.NewGame`。
+8. 存档禁 Dictionary；新字段带默认值。
+9. 内容文本用中文引号。
+10. HorizontalLayoutGroup 的 childControl 必须 true。
+11. Tween/延迟回调入口判空。
+12. `requireMarks` 数组 AND；OR 要拆事件。
+13. Effects **无** compliance/efficiency 字段——两把尺只走 DossierOption。
 
-### Python（环境里是 Python 2）
-15. `io.open(p, encoding=…)` 会报错、print 是语句、json 句柄有坑——脚本加 `# -*- coding: utf-8 -*-`，写文件用 `open(path,'wb').write(s.encode('utf-8'))`。
-16. 批量改文本后**先 grep 验证再编译**（全角/半角引号、CRLF 都是真实事故来源）。
+### LLM
+14. **严禁双 llama-server**（16GB 会卡死）。
+15. 失败静默回退内置内容。
 
-### llama-server / LLM
-17. **严禁双实例**：16GB RAM 装不下两个 9B 模型，并跑会卡死整机（真实事故）。测试前按进程名清点必须=0、测完按名清理并复核。用户自己可能常驻 8081 的服务——**起测试实例前先看**。
-18. Git Bash 里 **`$!` 不是 Windows PID**，不能作为 taskkill 依据；用 `wmic process where "name='llama-server.exe'" get ProcessId | tr -d '\r'` 查真实 PID。
-19. 启动参数已按 `D:\AI` 报告标定（`-ngl 28 -ctk q4_0 -ctv q4_0 -ub 128 -fa on -t 16 --cpu-range 0-19`，见 changelog/PHASE-4 补丁十），改动前先读报告；曾把"双实例争抢"误判为"-fa on 中毒"——**排除性能问题必须单实例对照**。
-20. Git Bash 的 curl 直接发中文 JSON 会转码毁掉（server 报 ill-formed UTF-8）——写 UTF-8 文件用 `--data-binary @file`。
-21. 长提示测速必须走 llama-server（llama-cli 对 64K+ prefill 会静默死锁，D:\AI\README 实测结论）。
+## 7. 下一刀
 
-## 7. 已知短板与下一步候选（接手后可做的事）
+| 优先 | 项 |
+| --- | --- |
+| 高 | T4 完整 DeskRoot 拆分；实机标定两把尺 |
+| 高 | M1 手写 40+ 精修；恢复 ContentClockRival |
+| 中 | 口径案头便签视觉；NewsPile 桌角化 |
+| 低 | Windows 包；Unity 6 |
 
-- **时钟内容**：已接考核冲刺/巡视/专项三类（ContentClocks）；可继续加「借调倒计时」「转官考试冲刺」。
-- **竞争者系统**：里程碑链已落地（ContentRival）；可做许飞晋升为副科后的正面冲突事件、同批结局对照卡。
-- **NPC 头像**为印章式占位；履历卡已预留槽位，未来接美术资产即可替换。
-- **AI 家信/微信**已按月/偶发接线；可做可交互「回信」选项（写 marks）。
-- **侧栏**状态页已卡片化；职业/档案/日志页仍为纯文本块。
-- 音频目前是程序合成三件套（章/纸/点）；立绘、BGM 均未做。
-- **独立包**：`STARSTATE/构建 Windows 包` → `E:/Starstate/builds/Starstate/`；升级路径 Unity 6 LTS（AGENTS 技术栈一节）。
-- 同步纪律：`robocopy game-src/Assets/Scripts game/Assets/Scripts /E /XF *.meta`，**禁止**把 Scripts 整夹拷成 `Scripts/Scripts`。
-
-## 8. 规模速览（2026-09-06）
+## 8. 规模速览（2026-09-10）
 
 | 维度 | 数值 |
 | --- | --- |
-| C# 文件 / 行数 | 37 / ≈11000（Core 19 · Ui 7 · Editor 1 · Tests 5＋asmdef） |
-| 事件注册（Flow.Register） | 151 处（运行时唯一 id 130+；md 循环事件按年展开） |
-| 剧情链 | 数据造假案三幕、AI 专班、房子、父亲体检、挖角（中途辞职）、老康来信、初心对账 等 |
-| 任务模板 / 日常文案 / 新闻 | 50（×5 骨架）/ 117 / 118 |
-| 月度主题 | 12 节律 × md 循环 |
-| 测试 | EditMode 22 项全绿（含十年自动通关回归、平衡探针、时钟/竞争者） |
-| 存档 | saveVersion 4（marks/echoQueue/clocks/plan/rival/ambition/poolLog） |
+| 玩法起点 | 七品市长 · 大同 · 2026-09 |
+| 卷宗 | 手写 12＋模板池 36＋Generator 14 套 |
+| 口径 | 6 条 · 案头 4 槽 |
+| 常委密谈 | 10 人 × 4 条 |
+| 剧情链 | 对上报告、算法审批（分叉） |
+| 测试 | 30 过 / 5 跳过 |
+| 存档 | saveVersion 5 |

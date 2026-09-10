@@ -22,21 +22,21 @@ namespace Starstate.Core
     [Serializable]
     public class PlayerState
     {
-        public string name = "沈知行";
-        public int birthYear = 2003;
+        public string name = "沈砚舟";
+        public int birthYear = 1985;
         public string school = "国立中央翰林院大学";
         public string major = "经济学（社会科学方向）";
         public Attrs attrs = new Attrs();
-        public int energy = 80, stress = 20, morale = 70;
-        public int reputation = 5;      // 社会声望（速率随职级递增 Q4-05）
-        public int polCapital = 0;      // 政治资本
-        public string unit = "长安市发展和改革局";
-        public string post = "综合科";
-        public string rank = "吏三·科员";
-        public int probationMonths = 0; // 试用期已过月数（满12转正）
-        public int savings = 12000;     // 占位：实习积蓄＋家庭支持
-        public int monthlyIn = 9300;    // 占位：月薪8500＋基本补贴800
-        public int monthlyOut = 4700;   // 占位：公租房900＋生活3800
+        public int energy = 70, stress = 35, morale = 60;
+        public int reputation = 40;     // 社会声望（七品起点）
+        public int polCapital = 25;     // 政治资本
+        public string unit = "大同市人民政府";
+        public string post = "市长";
+        public string rank = "七品·正厅";
+        public int probationMonths = 0;
+        public int savings = 280000;    // 市级主官量级占位（清白工资积累）
+        public int monthlyIn = 18000;   // 正厅工资+补贴口径占位
+        public int monthlyOut = 9500;   // 家庭开支占位
     }
 
     [Serializable]
@@ -206,9 +206,9 @@ namespace Starstate.Core
     [Serializable]
     public class GameState
     {
-        public int saveVersion = 4;                                 // 存档结构版本（GameApp 做兼容门槛；v4=Phase 4）
+        public int saveVersion = 5;                                 // 存档结构版本（v5=Phase 5 七品市长+卷宗）
         public Phase phase = Phase.Prologue;
-        public string date = "2026-08-24";
+        public string date = "2026-09-01";
         public List<string> queue = new List<string>();      // 今日待触发事件 id
         public string currentEvent;                          // 呈现中的事件 id（可断点续显）
         public bool hasPending;                              // 结果等待“继续”
@@ -227,22 +227,23 @@ namespace Starstate.Core
         public MonthState month = new MonthState();
         public List<string> fired = new List<string>();      // 已触发事件 id
 
-        // —— 职业生涯（Phase 3）——
-        public string grade = "吏三·科员";                    // 吏三·科员/吏二·副科/吏一·正科/十品·副处
-        public string gradeSince = "2026-09-01";              // 现职级起任时间
-        public string route = "";                             // 笔杆子/产业经济/投资项目/区域协调
-        public string seconded = "";                          // 借调/挂职/学习单位（""=在局）
-        public int baseExpMonths = 12;                        // 基层公共事务履历（实践年12个月起算）
-        public bool examPassed;                               // 州级转官考试通过
-        public bool academyDone;                              // 省政治学院结业
+        // —— 职业生涯（Phase 5：七品市长）——
+        public string grade = "七品·正厅";                    // 七品·正厅 → 六品·副省
+        public string gradeSince = "2026-09-01";
+        public string route = "";                             // 产业转型/民生兜底/项目攻坚/向上争取
+        public string seconded = "";
+        public int baseExpMonths = 240;                       // 最快轨履历（已具备，非科员积累）
+        public bool examPassed;                               // 帝国考试（高等级）——就任时已完成
+        public bool academyDone;                              // 政治学院结业——就任时已完成
         public int outstandingYears;                          // 考核优秀次数
         public List<YearEval> evals = new List<YearEval>();   // 年度考核记录
-        public int violationCount;                            // 程序违规累计（监察线）
+        public int violationCount;                            // 程序违规累计
+        public int termYears;                                 // 现届已任年数（5 年一届）
 
         // —— 生活副线 ——
-        public string partner = "";                           // 恋人/配偶姓名
-        public bool married, hasChild;
-        public string housing = "公租房";
+        public string partner = "林晚";
+        public bool married = true, hasChild = true;
+        public string housing = "市政府周转房";
 
         // —— 结局 ——
         public bool resigned, underInvestigation;
@@ -263,6 +264,19 @@ namespace Starstate.Core
         public RivalState rival = new RivalState();                  // 同批竞争者（P4.2）
         public string ambition = "";                                 // 开局志向（P4.4：做事/晋升/安稳/搞钱）
         public List<string> poolLog = new List<string>();            // 随机池触发流水 "id@iso"（冷却用，截断保留）
+
+        // —— Phase 5：卷宗与两把尺 ——
+        public int compliance = 100;                           // 合规分 0-100
+        public int efficiency = 70;                            // 效率分 0-100
+        public List<string> pendingDossierIds = new List<string>();   // 本周待办卷宗 id
+        public List<string> openDossierIds = new List<string>();      // 仍打开（未办结）
+        public ActiveDossier activeDossier;                    // 正在办理
+        public List<DossierLogEntry> dossierLog = new List<DossierLogEntry>();
+        public List<string> dossierFired = new List<string>(); // 已使用卷宗实例 id
+        public int weekDossierBudget = 5;                      // 本周件数上限
+        public List<string> knownRules = new List<string>();   // 已获口径（档案全集）
+        public List<string> deskRules = new List<string>();    // 案头槽位（上限 4，新件顶掉最旧）
+        public string openRule = "";                           // 案头摊开的口径（空=未摊开）
 
         // —— 结算数据（参与存档，防止读档空引用）；runtimeEvent 为单回合临时事件，不入档 ——
         [NonSerialized] public GameEvent runtimeEvent;
@@ -467,5 +481,83 @@ namespace Starstate.Core
         public int integrityCount;
         public string flavor;
         public string monthDigest;      // 本月大事记（Phase 4 上下文化）
+    }
+
+    // ---------------- Phase 5：卷宗（Papers Please）----------------
+
+    [Serializable]
+    public class DossierIssue
+    {
+        public string id = "";
+        public string pageRef = "";     // 藏在哪一页（1 起）
+        public string detectHint = "";  // 口径/关联线索（不直接剧透结论）
+        public string ruleKey = "";     // 对应 Rulebook 条目 id（案头摊开可加成）
+        public int severity = 1;        // 1-3
+        public bool discovered;         // 玩家已核出
+    }
+
+    [Serializable]
+    public class DossierPage
+    {
+        public string title = "";
+        public List<string> paras = new List<string>();
+        public string table = "";       // 可选：程序表格文本（制表符/竖线分隔）
+    }
+
+    [Serializable]
+    public class DossierOption
+    {
+        public string label = "";
+        public string whenMark = "";    // 叙事门槛（空=总是）
+        public string whenNotMark = "";
+        public string lockReason = "";  // 锁定时显示
+        public Effects effects;
+        public string result = "";
+        public int complianceDelta;     // 该处置对合规分的直接修正（主雷另算）
+        public int efficiencyDelta;
+        public bool gray;               // 灰区选项
+    }
+
+    [Serializable]
+    public class Dossier
+    {
+        public string id = "";
+        public string kind = "routine"; // routine|deadline|cosign|risk|showcase
+        public string form = "请示";    // 请示|会议材料|人事单|财政件|土地件|信访件|突发事件|省交办|巡视整改|协议|对上报告
+        public string title = "";
+        public string docNo = "";
+        public string org = "";         // 来文单位
+        public string deadline = "";    // ISO；空=本周内
+        public List<DossierPage> pages = new List<DossierPage>();
+        public List<DossierIssue> issues = new List<DossierIssue>();
+        public List<DossierOption> options = new List<DossierOption>();
+        public int checkBudget = 3;     // 核对次数
+        public bool generated;          // 模板生成（非手写）
+    }
+
+    [Serializable]
+    public class DossierLogEntry
+    {
+        public string date = "";
+        public string dossierId = "";
+        public string title = "";
+        public string disposition = ""; // 照准/退回/请示/会签/压下/特事特办
+        public int issuesMissed;        // 未查出的雷数
+        public int issuesFound;
+        public int complianceDelta;
+        public int efficiencyDelta;
+        public bool overdue;
+    }
+
+    [Serializable]
+    public class ActiveDossier
+    {
+        public string id = "";
+        public int page = 1;            // 当前页（1 起）
+        public int checksLeft = 3;
+        public List<string> foundIssues = new List<string>();
+        public bool resolved;
+        public string pendingResultTitle = "";
+        public List<string> pendingResultParas = new List<string>();
     }
 }

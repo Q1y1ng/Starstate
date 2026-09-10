@@ -17,7 +17,7 @@ namespace Starstate.Ui
         private GameState st;
         private string tab = "状态";
         private string lastKind = "";
-        private const int SaveVersion = 4;   // v4：Phase 4 叙事引擎（marks/回响/时钟/周计划/竞争者）
+        private const int SaveVersion = 5;   // v5：Phase 5 七品市长＋卷宗引擎（旧档引导重开）
         private const string FontScaleKey = "starstate_font_scale";
         private const string LlmKey = "starstate_llm_cfg3";   // v3：默认 autoStart=false、ctx=16384（降启动占用）
 
@@ -67,6 +67,7 @@ namespace Starstate.Ui
             ui.OnOptionChosen += Choose;
             ui.OnPlanAdjusted += PlanAdjusted;
             ui.OnTabSwitched += t => { tab = t; RenderSide(); };
+            ui.OnRuleOpen += OpenRule;
             ui.OnNewGame += StartNew;
             ui.OnQuit += Quit;
             ui.OnFastForward += FastForward;
@@ -482,6 +483,22 @@ namespace Starstate.Ui
                 StartCoroutine(RequestWeeklyReview());
         }
 
+        /// <summary>口径手册：摊开/收起（""=收起）。</summary>
+        private void OpenRule(string ruleId)
+        {
+            if (st == null) return;
+            if (string.IsNullOrEmpty(ruleId)) Rulebook.CloseDesk(st);
+            else Rulebook.Open(st, ruleId);
+            Save();
+            RenderSide();
+            // 卷宗正文里的案头提示行要跟上
+            if (lastKind == "dossier")
+            {
+                var scene = Flow.CurrentScene(st);
+                ui.RenderMain(scene);
+            }
+        }
+
         /// <summary>AI 科长周评：周五点评后追加一段引用本周真实事件的评语（失败静默）。</summary>
         private IEnumerator RequestWeeklyReview()
         {
@@ -496,7 +513,7 @@ namespace Starstate.Ui
                 microBusy = false;
                 string text = StripPlain(content);
                 if (!string.IsNullOrEmpty(text) && st != null && st.hasPending)
-                    ui.AppendBodyPara("周衡之合上记录本，补了一句：" + text);
+                    ui.AppendBodyPara("周谨合上记录本，补了一句：" + text);
             },
             e => { microBusy = false; });
         }

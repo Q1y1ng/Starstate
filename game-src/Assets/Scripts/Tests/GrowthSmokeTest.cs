@@ -21,12 +21,12 @@ namespace Starstate.Tests
         [Test]
         public void NewGame_Uses_Initial_Attrs()
         {
-            var st = State.NewGame("测试");
-            Assert.AreEqual(75, st.player.attrs.professional);
-            Assert.AreEqual(35, st.player.attrs.admin);
-            Assert.AreEqual(50, st.player.attrs.exec);
-            Assert.AreEqual(55, st.player.attrs.comm);
-            Assert.AreEqual(30, st.player.attrs.political);
+            var st = State.NewGame("测试"); // 默认华北出身：exec+3, professional+1
+            Assert.AreEqual(56, st.player.attrs.professional);
+            Assert.AreEqual(62, st.player.attrs.admin);
+            Assert.AreEqual(61, st.player.attrs.exec);
+            Assert.AreEqual(50, st.player.attrs.comm);
+            Assert.AreEqual(55, st.player.attrs.political);
         }
 
         [Test]
@@ -42,11 +42,11 @@ namespace Starstate.Tests
 
             Flow.Choose(st, 0);
 
-            Assert.AreEqual(p0, st.player.attrs.professional);   // 不得把初始值 75 当增量
-            Assert.AreEqual(c0, st.player.attrs.comm);           // 不得 +55
-            Assert.AreEqual(l0, st.player.attrs.political);      // 不得 +30
-            Assert.AreEqual(50 + 2, st.player.attrs.exec);       // 工作周：执行 +2
-            Assert.AreEqual(35 + 1, st.player.attrs.admin);      // 行政 +1
+            Assert.AreEqual(p0, st.player.attrs.professional);
+            Assert.AreEqual(c0, st.player.attrs.comm);
+            Assert.AreEqual(l0, st.player.attrs.political);
+            Assert.AreEqual(61 + 2, st.player.attrs.exec);
+            Assert.AreEqual(62 + 1, st.player.attrs.admin);
         }
 
         [Test]
