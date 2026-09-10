@@ -11,7 +11,10 @@
 | 测试 | `ContentClockRivalTest` 去 Ignore；**37 Passed / 0 Failed / 0 Skipped** |
 | UI | `Ui/DeskSurface.cs` 纹理与桌底拆出；菜单版本 **v0.2.6 Preview** |
 | 手写卷宗 | Y1 +3：常委会 AI 措施会签（席位雷）、基层减负督查、矿井涉险（监管责任口径） |
-| 验证 | ALL_OK；已同步 game/ |
+| 归档 | 科员线 12 个 Content*.cs 移入 `archive/phase1-4-clerk/`（不编译，可恢复） |
+| 提交 | main `c76c612`（作者授权直接 commit，未 push） |
+| Windows 包 | 删旧包后重打：`E:/Starstate/builds/Starstate/Starstate.exe`（Build Successful） |
+| 验证 | ALL_OK；EditMode 37/37 |
 
 ### 工程备忘
 
