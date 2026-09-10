@@ -198,8 +198,8 @@
 ### 验证与产物
 
 - 独立编译 `ALL_OK`；EditMode **22/22 Passed**（原 17 ＋ ContentClockRivalTest×4 ＋ BalanceSmokeTest×1）。
-- LLM 实测：本地 llama-server 单实例（ctx=16K）非流式 + SSE 流式均连通（见下文补记）。
-- Windows 包：`Editor/BuildPlayer.BuildWindows`（菜单 STARSTATE/构建 Windows 包；batchmode `-executeMethod` 可用）。
-- Git：本补丁作为规范提交落库（含 `.gitignore` 覆盖 Library/tmpbuild）。
+- LLM 实测（2026-09-10，本机单实例 ctx=16K）：`/health` 就绪；非流式 `{"ok":1}` 与纯文本句均 200；SSE 流式 80+ chunk 正常。**思维链模型**（Ornith）会先吐 `reasoning_content`：`ChatStream` 改为单独累积 `content` 作解析结果，预览仍可含思维链；周评/家信 max_tokens 上调（140→280 / 360）以免被思维链吃光。
+- Windows 包：`E:/Starstate/builds/Starstate/Starstate.exe`（约 0.6MB + UnityPlayer/数据目录）。
+- Git：`8589fcf` 补丁十三规范提交；`.gitignore` 增加 `builds/`。
 
 **接手者注意**：同步 `game-src`→`game` 时用 robocopy/cp 到 `Scripts/` 目录内容，**不要**把 `Scripts` 整夹拷成 `Scripts/Scripts`（会重复 asmdef 直接炸编译）；新事件 id 全局唯一；时钟 `onFull` 事件必须 `when=null`。
