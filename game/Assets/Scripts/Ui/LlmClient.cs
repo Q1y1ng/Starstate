@@ -1,13 +1,13 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
+using System.Text;
 using Starstate.Core;
 using UnityEngine;
 using UnityEngine.Networking;
 
 namespace Starstate.Ui
 {
-    /// <summary>OpenAI 兼容 Chat Completions 客户端（UnityWebRequest 协程驱动）。</summary>
+    /// <summary>OpenAI 兼容 Chat Completions 客户端（UnityWebRequest 协程驱动；支持 SSE 流式）。</summary>
     public static class LlmClient
     {
         [Serializable]
@@ -39,6 +39,106 @@ namespace Starstate.Ui
             public string reasoning_content;   // 思维链模型：正文为空时兜底用
         }
 
+        /// <summary>SSE 增量下载器：把 data: 行里的 delta.content 拼成全文，并回调部分文本。</summary>
+        private class SseHandler : DownloadHandlerScript
+        {
+            private readonly StringBuilder acc = new StringBuilder();
+            private readonly StringBuilder contentAcc = new StringBuilder();
+            private readonly Action<string> onPartial;
+            private string pending = "";
+            private string full = "";
+            private string contentOnly = "";
+
+            public SseHandler(Action<string> onPartial) : base(new byte[32 * 1024])
+            {
+                this.onPartial = onPartial;
+            }
+
+            /// <summary>含思维链的全文（流式预览用）。</summary>
+            public string FullText { get { return full; } }
+
+            /// <summary>仅正文 content（思维链模型会先吐 reasoning；解析用这个）。</summary>
+            public string ContentOnly { get { return contentOnly; } }
+
+            protected override bool ReceiveData(byte[] data, int dataLength)
+            {
+                if (data == null || dataLength <= 0) return false;
+                pending += Encoding.UTF8.GetString(data, 0, dataLength);
+                int idx;
+                while ((idx = pending.IndexOf('\n')) >= 0)
+                {
+                    string line = pending.Substring(0, idx).Trim();
+                    pending = pending.Substring(idx + 1);
+                    if (line.Length == 0 || !line.StartsWith("data:")) continue;
+                    string payload = line.Substring(5).Trim();
+                    if (payload == "[DONE]") continue;
+                    string piece = ExtractContent(payload);
+                    string contentPiece = ExtractJsonStringField(payload, "content");
+                    if (!string.IsNullOrEmpty(contentPiece))
+                    {
+                        contentAcc.Append(contentPiece);
+                        contentOnly = contentAcc.ToString();
+                    }
+                    if (string.IsNullOrEmpty(piece)) continue;
+                    acc.Append(piece);
+                    full = acc.ToString();
+                    if (onPartial != null) onPartial(full);
+                }
+                return true;
+            }
+
+            /// <summary>从 SSE JSON 片段里抠出 content/delta 字符串（容错，不依赖 JsonUtility 嵌套）。
+            /// 思维链模型会先回 reasoning_content；content 为空时回退。</summary>
+            private static string ExtractContent(string json)
+            {
+                if (string.IsNullOrEmpty(json)) return "";
+                string content = ExtractJsonStringField(json, "content");
+                if (!string.IsNullOrEmpty(content)) return content;
+                return ExtractJsonStringField(json, "reasoning_content");
+            }
+
+            private static string ExtractJsonStringField(string json, string field)
+            {
+                string key = "\"" + field + "\":";
+                int i = json.IndexOf(key, StringComparison.Ordinal);
+                if (i < 0) return "";
+                i += key.Length;
+                while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+                if (i >= json.Length || json[i] != '"') return "";
+                i++;
+                var sb = new StringBuilder();
+                while (i < json.Length)
+                {
+                    char c = json[i++];
+                    if (c == '\\' && i < json.Length)
+                    {
+                        char n = json[i++];
+                        switch (n)
+                        {
+                            case 'n': sb.Append('\n'); break;
+                            case 't': sb.Append('\t'); break;
+                            case 'r': sb.Append('\r'); break;
+                            case '"': sb.Append('"'); break;
+                            case '\\': sb.Append('\\'); break;
+                            case 'u':
+                                if (i + 3 < json.Length)
+                                {
+                                    string hex = json.Substring(i, 4);
+                                    i += 4;
+                                    try { sb.Append((char)Convert.ToInt32(hex, 16)); }
+                                    catch { /* 忽略坏转义 */ }
+                                }
+                                break;
+                            default: sb.Append(n); break;
+                        }
+                    }
+                    else if (c == '"') break;
+                    else sb.Append(c);
+                }
+                return sb.ToString();
+            }
+        }
+
         /// <summary>发起一次对话补全。ok 返回 message.content 原文；err 返回错误说明。
         /// cancelled：可选取消谓词（如交谈弹层已关闭）——命中即中止请求，ok/err 均不回调。</summary>
         public static IEnumerator Chat(LlmConfig cfg, ChatMsg[] messages, int maxTokens,
@@ -55,7 +155,7 @@ namespace Starstate.Ui
             string body = JsonUtility.ToJson(req);
             using (var web = new UnityWebRequest(cfg.endpoint, "POST"))
             {
-                byte[] bytes = System.Text.Encoding.UTF8.GetBytes(body);
+                byte[] bytes = Encoding.UTF8.GetBytes(body);
                 web.uploadHandler = new UploadHandlerRaw(bytes);
                 web.downloadHandler = new DownloadHandlerBuffer();
                 web.SetRequestHeader("Content-Type", "application/json");
@@ -68,7 +168,7 @@ namespace Starstate.Ui
                 {
                     if (cancelled != null && cancelled())
                     {
-                        web.Abort();   // 会话已作废：中止在途请求，省流量与占用
+                        web.Abort();
                         yield break;
                     }
                     yield return null;
@@ -83,28 +183,97 @@ namespace Starstate.Ui
                     err("服务返回 " + web.responseCode + "：" + Trim(web.downloadHandler.text, 160));
                     yield break;
                 }
-                try
+                string content = ParseChatBody(web.downloadHandler.text, out string parseErr);
+                if (content == null) { err(parseErr); yield break; }
+                ok(content);
+            }
+        }
+
+        /// <summary>流式对话补全（SSE）。onDelta 每收到增量回调一次当前全文；完成后 ok(全文)。
+        /// 服务端若忽略 stream 返回整包 JSON，会自动回退解析。cancelled 语义同 Chat。</summary>
+        public static IEnumerator ChatStream(LlmConfig cfg, ChatMsg[] messages, int maxTokens,
+            Action<string> onDelta, Action<string> ok, Action<string> err, Func<bool> cancelled = null)
+        {
+            var req = new ChatReq
+            {
+                model = string.IsNullOrEmpty(cfg.model) ? "local" : cfg.model,
+                messages = messages,
+                temperature = cfg.temperature,
+                max_tokens = maxTokens,
+                stream = true,
+            };
+            string body = JsonUtility.ToJson(req);
+            using (var web = new UnityWebRequest(cfg.endpoint, "POST"))
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(body);
+                web.uploadHandler = new UploadHandlerRaw(bytes);
+                var sse = new SseHandler(onDelta);
+                web.downloadHandler = sse;
+                web.SetRequestHeader("Content-Type", "application/json");
+                web.SetRequestHeader("Accept", "text/event-stream");
+                if (!string.IsNullOrEmpty(cfg.apiKey))
+                    web.SetRequestHeader("Authorization", "Bearer " + cfg.apiKey);
+                web.timeout = 180;
+                var op = web.SendWebRequest();
+                while (!op.isDone)
                 {
-                    var resp = JsonUtility.FromJson<ChatResp>(web.downloadHandler.text);
-                    if (resp == null || resp.choices == null || resp.choices.Length == 0 || resp.choices[0].message == null)
+                    if (cancelled != null && cancelled())
                     {
-                        err("响应格式异常（无 choices.message）");
+                        web.Abort();
                         yield break;
                     }
-                    string content = resp.choices[0].message.content;
-                    if (string.IsNullOrEmpty(content))
-                        content = resp.choices[0].message.reasoning_content; // 思维链模型兜底
-                    if (string.IsNullOrEmpty(content))
-                    {
-                        err("模型返回了空内容");
-                        yield break;
-                    }
+                    yield return null;
+                }
+                if (web.result != UnityWebRequest.Result.Success)
+                {
+                    err("连接失败：" + WebErr(web, cfg));
+                    yield break;
+                }
+                if (web.responseCode >= 300)
+                {
+                    err("服务返回 " + web.responseCode + "：" + Trim(web.downloadHandler.text, 160));
+                    yield break;
+                }
+                string full = sse.ContentOnly;
+                if (string.IsNullOrEmpty(full)) full = sse.FullText;
+                if (string.IsNullOrEmpty(full))
+                {
+                    // 服务端可能忽略了 stream，回退整包解析
+                    string content = ParseChatBody(web.downloadHandler.text, out string parseErr);
+                    if (content == null) { err(parseErr); yield break; }
+                    if (onDelta != null) onDelta(content);
                     ok(content);
+                    yield break;
                 }
-                catch (Exception e)
+                ok(full);
+            }
+        }
+
+        private static string ParseChatBody(string raw, out string err)
+        {
+            err = "";
+            try
+            {
+                var resp = JsonUtility.FromJson<ChatResp>(raw);
+                if (resp == null || resp.choices == null || resp.choices.Length == 0 || resp.choices[0].message == null)
                 {
-                    err("解析响应失败：" + e.Message);
+                    err = "响应格式异常（无 choices.message）";
+                    return null;
                 }
+                string content = resp.choices[0].message.content;
+                if (string.IsNullOrEmpty(content))
+                    content = resp.choices[0].message.reasoning_content;
+                if (string.IsNullOrEmpty(content))
+                {
+                    err = "模型返回了空内容";
+                    return null;
+                }
+                return content;
+            }
+            catch (Exception e)
+            {
+                err = "解析响应失败：" + e.Message;
+                return null;
             }
         }
 

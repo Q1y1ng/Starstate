@@ -127,3 +127,79 @@
 
 - 自 Phase 4 收口＋补丁十/十一起，项目进入版本化命名：**STARSTATE v0.1 Preview**（主菜单右下角版本号同步更新）。
 - 版本基线评审报告：[docs/PROJECT-REVIEW.md](../docs/PROJECT-REVIEW.md)——十维度评分（综合 7.2/10）、系统完成度矩阵、风险清单与 v0.2 路线。最优先事项：git 版本控制与独立可执行打包。
+
+## 补丁十二 · LLM 启动降载与防双开（2026-09-10）
+
+**起因**：作者反馈「LLM 层每次游戏启动资源占用体感异常大」，要求检查启动逻辑。
+
+**排查结论**：不是逻辑写崩，而是**默认配置过重＋两处护栏缺口**。
+
+1. **主因——启动即全量拉模型**：`GameApp.Init` 在 `enabled && local && autoStart` 时立刻 `KickServer`；默认三者皆真，且 `ctx=65536`。llama-server 启动时按满 ctx 预留 KV，叠 5.6GB 权重＋LoRA＋Unity，16GB 机器易被打满。编辑器每次进 Play（OnDestroy→Kill→再 Play）等于反复全量加载。
+2. **参数与真实用法不匹配**：NPC 交谈/微事件/周评均为单次短 prompt（max_tokens≤460、无跨轮历史），64K 纯属浪费。补丁十标定命令行写的是 `-c 65536`，但**游戏内复验实际用的是 ctx 4096**——64K 未按真实启动路径在 6GB 卡压测。
+3. **`starting` 竞态**：置位在 `Process.Start` **之后**；自动拉起与「测试连接」几乎同时进入时可能双开（正是补丁十记录的内存打满事故形态）。并发等待还挂在可能为空/过期的 `proc` 上。
+4. **设置页未暴露 `autoStart` / `ctx`**：用户无法在 UI 关掉开机自启或把上下文降到够用档。
+
+**改动**：
+
+| 项 | 文件 | 内容 |
+| --- | --- | --- |
+| 默认懒加载 | `Core/Llm.cs` | `autoStart=false`——不启动即加载；首次交谈/测试连接时现场唤醒（`WakeThenTalk` / `TestFlow` 路径已存在） |
+| 默认上下文 | `Core/Llm.cs` | `ctx` 65536→**16384**（单次短 prompt 足够；设置可改回） |
+| 防双开 | `Ui/LlamaServer.cs` | `starting` 在 `Process.Start` **前**置位；循环内旧的 `if (starting)` 改为循环前统一走 `WaitForInFlightStart`（健康即成功，starting 结束仍未就绪则失败）；ctx 做 1024–65536 钳制 |
+| 设置页 | `Ui/UiRoot.cs` | 新增「启动时自动加载」开关＋「上下文 tokens」输入；卡片 680→720；`MakeSettingsInput` 支持行内半宽 |
+| 配置键 | `Ui/GameApp.cs` | `starstate_llm_cfg2`→**v3**（新默认对旧存档生效；自定义路径需在设置里重填） |
+
+**行为**：启动不再自动拉 llama-server；NPC 交谈/测试连接会现场唤醒；也可在设置打开自动加载。微事件/周评仍仅在 `llmReady` 时触发（不主动唤醒）——符合「AI 坏了照常玩」。
+
+**验证**：独立编译 `ALL_OK`；同步 `game/`（未动 `.meta`）；EditMode **17/17 Passed**。
+
+**接手者注意**：改 LLM 默认值时记得升 `LlmKey` 后缀，否则旧 PlayerPrefs 会盖住新默认；`starting` 必须保持「Start 前置位、所有出口复位」。
+
+## 补丁十三 · P1/P2 内容接线与工程打包（2026-09-10）
+
+**范围**（作者指定：先做 P1 与 P2，测通后再 git + Windows build）。
+
+### P1-3 常驻时钟接内容（`Core/ContentClocks.cs`）
+
+| 时钟 | 类型 | 启动 | 满格 |
+| --- | --- | --- | --- |
+| `clk_eval` 考核冲刺 | opportunity | 每年 11-01 | `clk_eval_full` 提前清零台账（admin/political/ren 评价） |
+| `clk_xuncha` 巡视组 | threat | 2028-09-10 | 巡视谈话（干净/谨慎两分支） |
+| `clk_xuncha_b` 回头看 | threat | 2031-10-08 | 反馈会销号 |
+| `clk_xuncha_c` 专项巡察 | threat | 2034-09-18 | 核实环节 |
+| `clk_proj` 专项初稿 | opportunity | 随机池（四周作战图） | 杀青交稿 |
+
+推进路径：事件 `clockOps` 建立/增减；随机池「调阅单 / 夜里加一班 / 市府办催了一次」按 marks 门槛可重复。威胁时钟负 delta 缓解、机会时钟正 delta 加速。
+
+### P1-4 竞争者里程碑链（`Core/ContentRival.cs`）
+
+许飞主线五节点（2027 报告 / 2029 饭局 / 2031 调重点项目办 / 2033 三等功 / 2034 转官考试）＋苏晴两节点（借调、提副科）＋何斌两节点（升副科、婚礼）＋人事季前「同批风声」循环与「差距感」池事件。选项写 marks 与关系记忆；侧栏「同批」卡片显示 `rival.progress` 与年度风声摘要。`RivalState.stage` 预留里程碑阶段。
+
+### P1-5 多存档槽（`Ui/GameApp.cs` + `Ui/UiRoot.cs`）
+
+- 路径：`starstate_save.json`=自动档（slot 0），`starstate_save_s1..3.json`=手动槽。
+- 主菜单按槽列出「继续」（标签含日期/姓名/职级）；新局优先写入空手动槽，全满覆盖自动档。
+- 手动槽每次 Save **镜像写自动档**（继续总能回到最新进度）。
+- 设置页新增「快照槽1/2/3」；重置只清当前槽。
+
+### P1-6 平衡探针（`Tests/BalanceSmokeTest.cs`）
+
+十年自动通关后检查：结局可达、任务/考核下限、高压/空精力日占比 <45%、积蓄非负、能力和成长。Debug.Log 输出关键指标。
+
+### P2 实现
+
+| 项 | 内容 |
+| --- | --- |
+| LLM 流式 | `LlmClient.ChatStream`（SSE + `DownloadHandlerScript`）；服务端忽略 stream 时自动回退整包解析；交谈加载中显示「已 N 字」 |
+| AI 家信/微信 | `LlmPrompt.FamilyLetterUser` / `WeChatUser`（【纯文本】）；每月上旬周末生成家信进日志（结果页可追加正文）；35% 概率同事微信进日志 |
+| 侧栏卡片化 | 状态页改公文卡片：基本信息/能力/身心/资源/同批/时钟 |
+| 内容审计脚本 | `tools/content-audit.py` → `tmpbuild/content-audit.json`（独特长字符串占比 0.973） |
+
+### 验证与产物
+
+- 独立编译 `ALL_OK`；EditMode **22/22 Passed**（原 17 ＋ ContentClockRivalTest×4 ＋ BalanceSmokeTest×1）。
+- LLM 实测：本地 llama-server 单实例（ctx=16K）非流式 + SSE 流式均连通（见下文补记）。
+- Windows 包：`Editor/BuildPlayer.BuildWindows`（菜单 STARSTATE/构建 Windows 包；batchmode `-executeMethod` 可用）。
+- Git：本补丁作为规范提交落库（含 `.gitignore` 覆盖 Library/tmpbuild）。
+
+**接手者注意**：同步 `game-src`→`game` 时用 robocopy/cp 到 `Scripts/` 目录内容，**不要**把 `Scripts` 整夹拷成 `Scripts/Scripts`（会重复 asmdef 直接炸编译）；新事件 id 全局唯一；时钟 `onFull` 事件必须 `when=null`。

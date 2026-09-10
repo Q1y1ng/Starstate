@@ -65,8 +65,8 @@ namespace Starstate.Ui
 
         // AI 接入（设置页控件）
         private LlmConfig llmCfg;
-        private Button llmEnableBtn, llmLocalBtn, llmRemoteBtn;
-        private InputField llmEndpoint, llmKey, llmModel, llmServer, llmModelPath, llmLora;
+        private Button llmEnableBtn, llmLocalBtn, llmRemoteBtn, llmAutoBtn;
+        private InputField llmEndpoint, llmKey, llmModel, llmServer, llmModelPath, llmLora, llmCtx;
         private Text llmStatus;
 
         // NPC 交谈弹层
@@ -103,7 +103,8 @@ namespace Starstate.Ui
         public event Action<int, int> OnPlanAdjusted;   // 周计划编辑器：槽位序号 ±增量
         public event Action<string> OnTabSwitched;
         public event Action OnNewGame;
-        public event Action OnContinue;
+        public event Action<int> OnContinueSlot;   // 多存档槽：槽位 0=自动 / 1–3
+        public event Action<int> OnSnapshotSlot;   // 设置页：快照到手动槽
         public event Action OnQuit;
         public event Action OnFastForward;
         public event Action OnOpenSettings;
@@ -617,6 +618,103 @@ namespace Starstate.Ui
             t.fontStyle = FontStyle.Bold;
         }
 
+        /// <summary>侧栏卡片容器：公文信笺底 + 内边距，让状态/时钟成为可扫读的块。</summary>
+        private GameObject BeginSideCard(string title)
+        {
+            var card = NewGo("Card_" + title, sideContent);
+            var img = card.AddComponent<Image>();
+            img.sprite = CardSprite();
+            img.type = Image.Type.Sliced;
+            img.color = FromHex("#FFFDF6");
+            var vlg = card.AddComponent<VerticalLayoutGroup>();
+            vlg.padding = new RectOffset(12, 12, 8, 10);
+            vlg.spacing = 3;
+            vlg.childForceExpandHeight = false;
+            vlg.childForceExpandWidth = true;
+            vlg.childControlHeight = true;
+            vlg.childControlWidth = true;
+
+            var head = NewText(card.transform, "CardHead", 12, Accent, TextAnchor.MiddleLeft);
+            head.text = title;
+            head.fontStyle = FontStyle.Bold;
+            head.rectTransform.SetParent(card.transform, false);
+            var hle = head.gameObject.AddComponent<LayoutElement>();
+            hle.preferredHeight = 18;
+            return card;
+        }
+
+        private void CardInfoRow(Transform parent, string label, string value)
+        {
+            var row = NewGo("Row_" + label, parent);
+            var hlg = row.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 8;
+            hlg.childForceExpandHeight = false;
+            hlg.childForceExpandWidth = false;
+            hlg.childControlWidth = true;
+            hlg.childControlHeight = true;
+
+            var lt = NewText(row.transform, "L", 12, InkSoft, TextAnchor.MiddleLeft);
+            lt.text = label;
+            lt.rectTransform.SetParent(row.transform, false);
+            var lle = lt.gameObject.AddComponent<LayoutElement>();
+            lle.preferredWidth = 70;
+            lle.minWidth = 70;
+
+            var vt = NewText(row.transform, "V", 13, Ink, TextAnchor.MiddleLeft);
+            vt.text = value;
+            vt.rectTransform.SetParent(row.transform, false);
+            var vle = vt.gameObject.AddComponent<LayoutElement>();
+            vle.flexibleWidth = 1;
+        }
+
+        private void CardBarRow(Transform parent, string label, int value, string colorHex)
+        {
+            // 复用 BarRow 的视觉：临时把 sideContent 换成 parent 不现实，这里复制精简版
+            var row = NewGo("Bar_" + label, parent);
+            var le = row.AddComponent<LayoutElement>();
+            le.preferredHeight = 22;
+            var hlg = row.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 8;
+            hlg.childAlignment = TextAnchor.MiddleLeft;
+            hlg.childForceExpandHeight = false;
+            hlg.childForceExpandWidth = false;
+            hlg.childControlWidth = true;
+            hlg.childControlHeight = true;
+
+            var lt = NewText(row.transform, "L", 12, InkSoft, TextAnchor.MiddleLeft);
+            lt.text = label;
+            var lle = lt.gameObject.AddComponent<LayoutElement>();
+            lle.preferredWidth = 70;
+            lle.minWidth = 70;
+
+            var wrap = NewGo("BarWrap", row.transform);
+            var wle = wrap.AddComponent<LayoutElement>();
+            wle.flexibleWidth = 1;
+            wle.preferredHeight = 12;
+            var bg = wrap.AddComponent<Image>();
+            bg.sprite = BarSprite();
+            bg.type = Image.Type.Simple;
+            bg.color = FromHex("#E3DAC4");
+
+            var fillGo = NewGo("Fill", wrap.transform);
+            Stretch(fillGo.GetComponent<RectTransform>(), Vector2.zero, Vector2.one,
+                new Vector2(1.5f, 1.5f), new Vector2(-1.5f, -1.5f));
+            var fill = fillGo.AddComponent<Image>();
+            fill.sprite = BarSprite();
+            fill.type = Image.Type.Filled;
+            fill.fillMethod = Image.FillMethod.Horizontal;
+            fill.fillOrigin = (int)Image.OriginHorizontal.Left;
+            fill.color = FromHex(colorHex);
+
+            float target = Mathf.Clamp01(value / 100f);
+            fill.fillAmount = target;
+
+            var vt = NewText(row.transform, "V", 12, InkSoft, TextAnchor.MiddleRight);
+            vt.text = value.ToString();
+            var vle = vt.gameObject.AddComponent<LayoutElement>();
+            vle.preferredWidth = 34;
+        }
+
         private void InfoRow(string label, string value)
         {
             var row = NewGo("Row_" + label, sideContent);
@@ -705,35 +803,61 @@ namespace Starstate.Ui
         {
             var p = st.player;
             int age = GameClock.Parse(st.date).Year - p.birthYear;
-            SideHeader("基本信息");
-            InfoRow("姓名", p.name + " · " + age + "岁");
-            InfoRow("母校", p.school);
-            InfoRow("专业", p.major);
-            InfoRow("单位", p.unit);
-            InfoRow("岗位", p.post + " · " + p.rank);
-            if (p.probationMonths < 12) InfoRow("试用期", p.probationMonths + " / 12 个月");
-            InfoRow("住房", st.housing);
+
+            var c1 = BeginSideCard("基本信息");
+            CardInfoRow(c1.transform, "姓名", p.name + " · " + age + "岁");
+            CardInfoRow(c1.transform, "母校", p.school);
+            CardInfoRow(c1.transform, "专业", p.major);
+            CardInfoRow(c1.transform, "单位", p.unit);
+            CardInfoRow(c1.transform, "岗位", p.post + " · " + p.rank);
+            if (p.probationMonths < 12) CardInfoRow(c1.transform, "试用期", p.probationMonths + " / 12 个月");
+            CardInfoRow(c1.transform, "住房", st.housing);
             string fam = st.hasChild ? "已婚有孩" : st.married ? "已婚"
                 : string.IsNullOrEmpty(st.partner) ? "单身" : "与" + st.partner + "恋爱中";
-            InfoRow("家庭", fam);
+            CardInfoRow(c1.transform, "家庭", fam);
 
-            SideHeader("能力");
-            BarRow("专业", p.attrs.professional, "#4E6E8E");
-            BarRow("行政", p.attrs.admin, "#4E6E8E");
-            BarRow("执行", p.attrs.exec, "#4E6E8E");
-            BarRow("沟通", p.attrs.comm, "#4E6E8E");
-            BarRow("政治敏感", p.attrs.political, "#4E6E8E");
+            var c2 = BeginSideCard("能力");
+            CardBarRow(c2.transform, "专业", p.attrs.professional, "#4E6E8E");
+            CardBarRow(c2.transform, "行政", p.attrs.admin, "#4E6E8E");
+            CardBarRow(c2.transform, "执行", p.attrs.exec, "#4E6E8E");
+            CardBarRow(c2.transform, "沟通", p.attrs.comm, "#4E6E8E");
+            CardBarRow(c2.transform, "政治敏感", p.attrs.political, "#4E6E8E");
 
-            SideHeader("身心");
-            BarRow("精力", p.energy, "#5E8C6A");
-            BarRow("压力", p.stress, "#B0563F");
-            BarRow("士气", p.morale, "#C29B3C");
+            var c3 = BeginSideCard("身心");
+            CardBarRow(c3.transform, "精力", p.energy, "#5E8C6A");
+            CardBarRow(c3.transform, "压力", p.stress, "#B0563F");
+            CardBarRow(c3.transform, "士气", p.morale, "#C29B3C");
 
-            SideHeader("资源");
-            InfoRow("社会声望", p.reputation.ToString());
-            InfoRow("政治资本", p.polCapital.ToString());
-            InfoRow("积蓄", p.savings + " 元");
-            InfoRow("月结余", (p.monthlyIn - p.monthlyOut) + " 元");
+            var c4 = BeginSideCard("资源");
+            CardInfoRow(c4.transform, "社会声望", p.reputation.ToString());
+            CardInfoRow(c4.transform, "政治资本", p.polCapital.ToString());
+            CardInfoRow(c4.transform, "积蓄", p.savings + " 元");
+            CardInfoRow(c4.transform, "月结余", (p.monthlyIn - p.monthlyOut) + " 元");
+
+            // 同批竞争者
+            var c5 = BeginSideCard("同批");
+            string rname = Npcs.Name(st.rival.id);
+            CardInfoRow(c5.transform, rname + "势头", st.rival.progress + " / 100");
+            if (st.rival.stage > 0) CardInfoRow(c5.transform, "里程碑", "阶段 " + st.rival.stage);
+            string yearRival = "";
+            var yd = GameClock.Parse(st.date);
+            if (ContentRegistry.Years.ContainsKey(yd.Year)) yearRival = ContentRegistry.Years[yd.Year].rival;
+            if (!string.IsNullOrEmpty(yearRival) && yearRival.Length > 36) yearRival = yearRival.Substring(0, 36) + "…";
+            if (!string.IsNullOrEmpty(yearRival)) CardInfoRow(c5.transform, "风声", yearRival);
+
+            // 常驻时钟仪表
+            if (st.clocks != null && st.clocks.Count > 0)
+            {
+                var c6 = BeginSideCard("时钟");
+                foreach (var c in st.clocks)
+                {
+                    if (c == null || c.max <= 0) continue;
+                    int pct = Mathf.Clamp(Mathf.RoundToInt(c.value * 100f / c.max), 0, 100);
+                    string color = c.kind == "threat" ? "#B0563F" : "#5E8C6A";
+                    string label = string.IsNullOrEmpty(c.label) ? c.id : c.label;
+                    CardBarRow(c6.transform, label, pct, color);
+                }
+            }
         }
 
         // ---------------- 新闻页 ----------------
@@ -945,12 +1069,33 @@ namespace Starstate.Ui
 
         public void ShowMenu(bool hasSave)
         {
+            // 兼容旧签名：有自动档则只展示自动档
+            if (hasSave) ShowMenu(new[] { 0 }, new[] { "自动档" });
+            else ShowMenu(new int[0], new string[0]);
+        }
+
+        /// <summary>多存档槽主菜单：每个可用槽一条“继续”按钮。</summary>
+        public void ShowMenu(int[] slots, string[] labels)
+        {
             menuPanel.SetActive(true);
             settingsPanel.SetActive(false);
             ClearChildren(optionsBox);
-            float y = -340;
+            float y = -330;
             var btns = new List<Button>();
-            if (hasSave) { btns.Add(MakeMenuButton("继 续 存 档", y, true, () => { if (OnContinue != null) OnContinue(); })); y -= 54; }
+            int n = slots != null ? slots.Length : 0;
+            if (n > 0)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    int captured = slots[i];
+                    string label = (labels != null && i < labels.Length && !string.IsNullOrEmpty(labels[i]))
+                        ? labels[i] : (captured == 0 ? "自动档" : "槽位 " + captured);
+                    if (label.Length > 22) label = label.Substring(0, 22) + "…";
+                    btns.Add(MakeMenuButton(label, y, true, () => { if (OnContinueSlot != null) OnContinueSlot(captured); }));
+                    y -= 40;
+                }
+                y -= 8;
+            }
             btns.Add(MakeMenuButton("新 游 戏", y, true, () => { if (OnNewGame != null) OnNewGame(); })); y -= 54;
             btns.Add(MakeMenuButton("玩 法 说 明", y, false, ShowTutorial)); y -= 54;
             btns.Add(MakeMenuButton("设 置", y, false, () => { if (OnOpenSettings != null) OnOpenSettings(); })); y -= 54;
@@ -964,12 +1109,12 @@ namespace Starstate.Ui
             foreach (var b in btns)
             {
                 StartCoroutine(MenuIn(b.GetComponent<RectTransform>(), delay));
-                delay += 0.05f;
+                delay += 0.04f;
             }
             StartCoroutine(MenuIn(menuHint.rectTransform, delay));
 
-            menuHint.text = hasSave
-                ? "检测到存档。改名后点击“新游戏”将另起一局。"
+            menuHint.text = n > 0
+                ? "选择存档槽继续，或改名后点击“新游戏”另起一局（优先写入空槽）。"
                 : "输入主角姓名（或保留默认），点击“新游戏”开始。";
         }
 
@@ -1002,7 +1147,7 @@ namespace Starstate.Ui
             settingsCg = settingsPanel.AddComponent<CanvasGroup>();
 
             var card = NewGo("SettingsCard", settingsPanel.transform);
-            Center(card.GetComponent<RectTransform>(), 0, 0, 480, 680);
+            Center(card.GetComponent<RectTransform>(), 0, 0, 480, 780);
             var cimg = card.AddComponent<Image>();
             cimg.sprite = CardSprite();
             cimg.type = Image.Type.Sliced;
@@ -1071,20 +1216,63 @@ namespace Starstate.Ui
             llmRemoteBtn.GetComponent<LayoutElement>().preferredHeight = 32;
             llmRemoteBtn.onClick.AddListener(() => SetLlmMode("remote"));
 
-            llmEndpoint = MakeSettingsInput(card.transform, -286, "服务地址（OpenAI 兼容 …/v1/chat/completions）", v => { if (llmCfg != null) llmCfg.endpoint = v; LlmChanged(); });
-            llmKey = MakeSettingsInput(card.transform, -320, "API 密钥（本地服务可留空）", v => { if (llmCfg != null) llmCfg.apiKey = v; LlmChanged(); });
-            llmModel = MakeSettingsInput(card.transform, -354, "模型名（本地服务可留空）", v => { if (llmCfg != null) llmCfg.model = v; LlmChanged(); });
-            llmServer = MakeSettingsInput(card.transform, -388, "llama-server.exe 路径", v => { if (llmCfg != null) llmCfg.serverExe = v; LlmChanged(); });
-            llmModelPath = MakeSettingsInput(card.transform, -422, "模型路径（gguf 文件或所在目录）", v => { if (llmCfg != null) llmCfg.modelPath = v; LlmChanged(); });
-            llmLora = MakeSettingsInput(card.transform, -456, "LoRA 适配器路径（可选，留空=不挂载）", v => { if (llmCfg != null) llmCfg.loraPath = v; LlmChanged(); });
+            // 自动加载 + 上下文（降启动内存占用的关键开关）
+            var autoRow = NewGo("AutoRow", card.transform);
+            Top(autoRow.GetComponent<RectTransform>(), 0, -272, 420, 32);
+            var arg = autoRow.AddComponent<HorizontalLayoutGroup>();
+            arg.spacing = 10;
+            arg.childForceExpandHeight = false;
+            arg.childForceExpandWidth = false;
+            arg.childControlWidth = true;
+            arg.childControlHeight = true;
+            llmAutoBtn = MakeButton(autoRow.transform, "启动时自动加载：关", 12, false);
+            llmAutoBtn.GetComponent<LayoutElement>().preferredWidth = 205;
+            llmAutoBtn.GetComponent<LayoutElement>().preferredHeight = 32;
+            llmAutoBtn.onClick.AddListener(ToggleLlmAuto);
+            llmCtx = MakeSettingsInput(autoRow.transform, 0, "上下文 tokens（默认 16384）",
+                v =>
+                {
+                    if (llmCfg == null) return;
+                    int n;
+                    if (!int.TryParse(v, out n)) n = 16384;
+                    llmCfg.ctx = Math.Max(1024, Math.Min(n, 65536));
+                    if (llmCtx != null) llmCtx.text = llmCfg.ctx.ToString();
+                    LlmChanged();
+                }, 205, false);
+            llmCtx.characterLimit = 6;
 
-            MakeSettingsButton(card.transform, "测试连接", -496, 420, () => { if (OnLlmTest != null) OnLlmTest(); });
+            llmEndpoint = MakeSettingsInput(card.transform, -326, "服务地址（OpenAI 兼容 …/v1/chat/completions）", v => { if (llmCfg != null) llmCfg.endpoint = v; LlmChanged(); });
+            llmKey = MakeSettingsInput(card.transform, -360, "API 密钥（本地服务可留空）", v => { if (llmCfg != null) llmCfg.apiKey = v; LlmChanged(); });
+            llmModel = MakeSettingsInput(card.transform, -394, "模型名（本地服务可留空）", v => { if (llmCfg != null) llmCfg.model = v; LlmChanged(); });
+            llmServer = MakeSettingsInput(card.transform, -428, "llama-server.exe 路径", v => { if (llmCfg != null) llmCfg.serverExe = v; LlmChanged(); });
+            llmModelPath = MakeSettingsInput(card.transform, -462, "模型路径（gguf 文件或所在目录）", v => { if (llmCfg != null) llmCfg.modelPath = v; LlmChanged(); });
+            llmLora = MakeSettingsInput(card.transform, -496, "LoRA 适配器路径（可选，留空=不挂载）", v => { if (llmCfg != null) llmCfg.loraPath = v; LlmChanged(); });
+
+            MakeSettingsButton(card.transform, "测试连接", -536, 420, () => { if (OnLlmTest != null) OnLlmTest(); });
 
             llmStatus = NewText(card.transform, "AiStatus", 11, InkSoft, TextAnchor.UpperLeft);
-            Top(llmStatus.rectTransform, 0, -540, 420, 40);
+            Top(llmStatus.rectTransform, 0, -578, 420, 28);
+
+            var snapRow = NewGo("SnapRow", card.transform);
+            Top(snapRow.GetComponent<RectTransform>(), 0, -608, 420, 32);
+            var snapHlg = snapRow.AddComponent<HorizontalLayoutGroup>();
+            snapHlg.spacing = 8;
+            snapHlg.childForceExpandHeight = false;
+            snapHlg.childForceExpandWidth = false;
+            snapHlg.childControlWidth = true;
+            snapHlg.childControlHeight = true;
+            for (int si = 1; si <= 3; si++)
+            {
+                int captured = si;
+                var sb = MakeButton(snapRow.transform, "快照槽" + si, 12, false);
+                var sle = sb.GetComponent<LayoutElement>();
+                sle.preferredWidth = 120;
+                sle.preferredHeight = 30;
+                sb.onClick.AddListener(() => { if (OnSnapshotSlot != null) OnSnapshotSlot(captured); });
+            }
 
             var bottom = NewGo("BottomRow", card.transform);
-            Top(bottom.GetComponent<RectTransform>(), 0, -586, 420, 38);
+            Top(bottom.GetComponent<RectTransform>(), 0, -648, 420, 38);
             var brg = bottom.AddComponent<HorizontalLayoutGroup>();
             brg.spacing = 10;
             brg.childForceExpandHeight = false;
@@ -1101,14 +1289,22 @@ namespace Starstate.Ui
             closeB.onClick.AddListener(() => settingsPanel.SetActive(false));
 
             settingsHint = NewText(card.transform, "SettingsHint", 11, "#8F8368", TextAnchor.MiddleCenter);
-            Bottom(settingsHint.rectTransform, 0, 22, 440, 34);
-            settingsHint.text = "AI 增强只用于 NPC 交谈与日常小插曲的文本生成；\n所有数值效果均有白名单上限，不影响平衡。改字号立即生效。";
+            Bottom(settingsHint.rectTransform, 0, 18, 440, 34);
+            settingsHint.text = "AI 增强只用于文本生成，数值效果走白名单。\n多存档：新局优先写空槽；设置里可快照到槽1–3。";
         }
 
-        private InputField MakeSettingsInput(Transform card, float y, string placeholder, Action<string> onCommit)
+        private InputField MakeSettingsInput(Transform card, float y, string placeholder, Action<string> onCommit,
+            float w = 420f, bool absolute = true)
         {
             var go = NewGo("In_" + placeholder, card);
-            Top(go.GetComponent<RectTransform>(), 0, y, 420, 32);
+            if (absolute)
+                Top(go.GetComponent<RectTransform>(), 0, y, w, 32);
+            else
+            {
+                var le = go.AddComponent<LayoutElement>();
+                le.preferredWidth = w;
+                le.preferredHeight = 32;
+            }
             var img = go.AddComponent<Image>();
             img.sprite = CardSprite();
             img.type = Image.Type.Sliced;
@@ -1156,6 +1352,7 @@ namespace Starstate.Ui
             llmServer.text = cfg.serverExe ?? "";
             llmModelPath.text = cfg.modelPath ?? "";
             llmLora.text = cfg.loraPath ?? "";
+            if (llmCtx != null) llmCtx.text = cfg.ctx.ToString();
             RefreshLlmWidgets();
         }
 
@@ -1165,12 +1362,25 @@ namespace Starstate.Ui
             BtnLabel(llmEnableBtn, llmCfg.enabled ? "AI 增强：已开启（点此关闭）" : "AI 增强：已关闭（点此开启）");
             SetBtnColor(llmLocalBtn, llmCfg.mode == "local" ? FromHex(Accent) : FromHex(TabIdle));
             SetBtnColor(llmRemoteBtn, llmCfg.mode == "remote" ? FromHex(Accent) : FromHex(TabIdle));
+            if (llmAutoBtn != null)
+            {
+                BtnLabel(llmAutoBtn, llmCfg.autoStart ? "启动时自动加载：开" : "启动时自动加载：关");
+                SetBtnColor(llmAutoBtn, llmCfg.autoStart ? FromHex(Accent) : FromHex(TabIdle));
+            }
         }
 
         private void ToggleLlm()
         {
             if (llmCfg == null) return;
             llmCfg.enabled = !llmCfg.enabled;
+            RefreshLlmWidgets();
+            if (OnLlmApplied != null) OnLlmApplied();
+        }
+
+        private void ToggleLlmAuto()
+        {
+            if (llmCfg == null) return;
+            llmCfg.autoStart = !llmCfg.autoStart;
             RefreshLlmWidgets();
             if (OnLlmApplied != null) OnLlmApplied();
         }

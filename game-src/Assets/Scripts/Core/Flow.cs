@@ -30,6 +30,9 @@ namespace Starstate.Core
             if (ev.when != null && ev.when.randomP > 0) RandomPool.Add(ev.id);
         }
 
+        /// <summary>测试/工具：事件是否已注册。</summary>
+        public static bool IsRegistered(string id) => !string.IsNullOrEmpty(id) && ById.ContainsKey(id);
+
         // ---------------- 生命周期 ----------------
 
         public static void Begin(GameState st)

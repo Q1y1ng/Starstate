@@ -166,6 +166,7 @@ namespace Starstate.Core
     {
         public string id = "xu";        // 竞争者 NPC id
         public int progress;            // 晋升竞争力 0-100（P4.2 仪表化）
+        public int stage;               // 里程碑阶段（ContentRival 推进）
     }
 
     [Serializable]
@@ -252,6 +253,7 @@ namespace Starstate.Core
 
         // —— AI 增强（LlmGameplay）：当日已生成过 AI 小事件的日期，防止重复 ——
         public string lastAiMicro = "";
+        public string lastLetterMonth = "";  // AI 家信：上次生成的年月 "yyyy-MM"
 
         // —— Phase 4：叙事引擎状态 ——
         public List<string> marks = new List<string>();              // 叙事标记（跨事件记忆，持久化）

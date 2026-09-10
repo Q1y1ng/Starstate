@@ -22,6 +22,8 @@ namespace Starstate.Core
             ContentFlavor.Register();     // 生活/社会/机关日常随机事件池（Phase 3 扩容）
             ContentChains.Register();     // Phase 4：剧情链（回响/分支/死flag兑现/志向）
             ContentMonthly.Register();    // Phase 4：月度主题事件（一年十二“节律”）
+            ContentClocks.Register();     // 补丁十三：常驻时钟内容（考核冲刺/巡视/专项）
+            ContentRival.Register();      // 补丁十三：同批竞争者里程碑链
             ContentNews.Register();       // 新闻栏：国际/国内/本地十年新闻流
             ContentNewsExtra.Register();  // Phase 4 新闻扩容（+40）
         }

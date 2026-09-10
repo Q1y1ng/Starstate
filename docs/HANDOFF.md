@@ -12,7 +12,7 @@
 | 项 | 状态 |
 | --- | --- |
 | Phase 1-4 | 全部完成；Phase 4 = 回响引擎＋周计划＋档案公文美学＋内容大填充（2026-09-06） |
-| 测试 | EditMode **17/17** 全绿；独立编译四程序集零错误（`tools/check-compile.sh`） |
+| 测试 | EditMode **22/22** 全绿；独立编译四程序集零错误（`tools/check-compile.sh`） |
 | 存档 | JsonUtility，**saveVersion 4**（GameApp.SaveVersion 门槛，旧档引导重开） |
 | 规模 | 37 个 C# 文件 / 约 11000 行；151 处事件注册（运行时唯一事件 130+）；任务模板 50；新闻 118；LLM 增强层（本地 llama-server 标定参数 / 外部 OpenAI 兼容） |
 
@@ -31,7 +31,7 @@
 | `Systems.cs` | `Clocks`（时钟仪表）＋`NpcTick`（每周淡忘/主动找你） | 时钟满格触发由 Flow.CheckClocks 完成 |
 | `TaskGenerator.cs` | 50 个任务模板 × **五种决策骨架**（例行/限时/协作/风险/露脸） | 模板只管主题，骨架提供选项结构 |
 | `Llm.cs` | LLM 全部 Core 侧：LlmPrompt（JSON schema 与【纯文本】协议）、MiniJson、LlmJson 容错解析、LlmGameplay 白名单效果 | AI 只产文本，数值效果必须走白名单 |
-| `Content*.cs` | 内容数据（见 §4 配方）；`ContentRegistry.RegisterAll` 是唯一注册入口 | ContentChains=剧情链，ContentMonthly=月度十二节律 |
+| `Content*.cs` | 内容数据（见 §4 配方）；`ContentRegistry.RegisterAll` 是唯一注册入口 | ContentChains=剧情链，ContentMonthly=月度十二节律；**ContentClocks=常驻时钟**；**ContentRival=同批里程碑** |
 
 ### Ui/（UGUI 全代码构建，零美术资产）
 
@@ -40,7 +40,7 @@
 | `GameApp.cs` | 组合根＋页面数据流＋存档＋LLM 编排；`GameBootstrap` 运行时自举 | Boot 场景**零脚本**是纪律；**存档管线=主线程序列化＋线程池原子落盘（WriteSaveAtomic）**，新增写盘一律走它；字体静态缓存 |
 | `UiRoot.cs` | 约 2000 行全部 UI：主题色/程序纹理/红头文件/印章/剪报/履历卡/台历/周计划编辑器/设置/交谈/引导 | `Build(font, docFont, scale)` 整树重建是换肤管线；**RenderMain 有场景签名去重**（同签名跳过重建）——改重建逻辑时注意 `lastSceneSig` 重置时机；周计划 ± 走 `UpdatePlanEditor` 局部刷新 |
 | `LlamaServer.cs` | llama-server 生命周期＋**标定启动参数**（ngl28+KV q4_0+ub128+fa+t16 绑核，降级阶梯兜底） | 参数有实测依据（changelog/PHASE-4 补丁十），别随手改；Kill 含 Dispose |
-| `LlmClient.cs` | HTTP（UnityWebRequest），Chat 支持取消谓词（会话作废即 Abort） | |
+| `LlmClient.cs` | HTTP（UnityWebRequest）；`Chat` 与 **`ChatStream`（SSE 流式）**；取消谓词 | 流式失败会回退整包解析 |
 | `Tween.cs` / `ButtonFx.cs` / `TextBuilders.cs` / `SoundFx.cs` | 补间库 / 按钮微反馈 / 纯字符串面板文本 / 程序合成音效 | 协程入口必须判空（销毁竞态） |
 
 ### Tests/（EditMode，NUnit）
@@ -61,7 +61,8 @@
 - **任务五骨架**：TaskGenerator.BuildByKind 按 55/15/12/10/8 抽签，同一模板主题套不同决策结构。
 - **结局个人史**：`Career.AppendMarkEchoes` 按 marks 装配"十年回响"段——加新链时记得在这里补一行。
 - **LLM 协议**：JSON 任务走 `LlmJson.ExtractFirstJson` 容错解析；纯文本任务在 user prompt 标注【纯文本】；效果一律 LlmGameplay 白名单；任何 AI 失败**静默回退**内置内容。交谈请求带取消谓词（弹层关闭即 Abort 在途请求）。
-- **存档管线**：`Save()`=主线程序列化（紧凑 JSON）→ 线程池 `WriteSaveAtomic`（临时文件→长度校验→`File.Replace` 原子替换，带写入锁）；`OnDestroy` 同步兜底。**新增持久化写盘一律走 WriteSaveAtomic**，不要在主线程直接 WriteAllText。
+- **LLM 启动（补丁十二）**：默认 `autoStart=false`、`ctx=16384`——游戏启动**不**拉 llama-server；首次交谈/测试连接现场唤醒。改默认值必须升 `GameApp.LlmKey` 后缀，否则旧 PlayerPrefs 会盖住新默认。`LlamaServer.starting` 必须在 `Process.Start` 前置位、所有出口复位（防双开）。
+- **存档管线**：`Save()`=主线程序列化（紧凑 JSON）→ 线程池 `WriteSaveAtomic`（临时文件→长度校验→`File.Replace` 原子替换，带写入锁）；`OnDestroy` 同步兜底。**多槽**：slot0=自动档 `starstate_save.json`，slot1–3=`starstate_save_sN.json`；手动槽每次 Save 镜像自动档。**新增持久化写盘一律走 WriteSaveAtomic**。
 - **渲染去重**：`RenderMain` 按场景签名跳过同场景重建（去闪烁/去 GC 尖峰）；周计划 ± 走 `UpdatePlanEditor` 局部刷新，不走 RenderAll。
 - **内存上限**：log 600 条（裁最旧 100）、NPC memories 8 条、poolLog 500 条；任务/材料档案**有意**全量保留（十年工作档案是内容本体）。
 
@@ -137,12 +138,14 @@ UI 表现与 LLM 链路自动测不到：Play 模式手测要点——主菜单�
 
 ## 7. 已知短板与下一步候选（接手后可做的事）
 
-- **时钟内容**：引擎层完备（建立/推进/满格触发/测试覆盖），但尚无常驻剧情时钟（候选：巡视组倒计时、年度考核冲刺仪表、专项 deadline）。
-- **竞争者系统**：目前是"势头仪表＋人事季文案"，可做独立里程碑链（许飞晋升事件、同批分化）。
+- **时钟内容**：已接考核冲刺/巡视/专项三类（ContentClocks）；可继续加「借调倒计时」「转官考试冲刺」。
+- **竞争者系统**：里程碑链已落地（ContentRival）；可做许飞晋升为副科后的正面冲突事件、同批结局对照卡。
 - **NPC 头像**为印章式占位；履历卡已预留槽位，未来接美术资产即可替换。
-- **AI 家信/微信**、AI 剧情润色：复用【纯文本】协议即可（周评已落地，照抄 RequestWeeklyReview 模式）。
-- 音频目前是程序合成三件套（章/纸/点）；立绘、BGM、打包发布（脱离 Unity 编辑器运行）均未做。
-- 升级路径：Unity 6 LTS（AGENTS 技术栈一节）；发布形态未定。
+- **AI 家信/微信**已按月/偶发接线；可做可交互「回信」选项（写 marks）。
+- **侧栏**状态页已卡片化；职业/档案/日志页仍为纯文本块。
+- 音频目前是程序合成三件套（章/纸/点）；立绘、BGM 均未做。
+- **独立包**：`STARSTATE/构建 Windows 包` → `E:/Starstate/builds/Starstate/`；升级路径 Unity 6 LTS（AGENTS 技术栈一节）。
+- 同步纪律：`robocopy game-src/Assets/Scripts game/Assets/Scripts /E /XF *.meta`，**禁止**把 Scripts 整夹拷成 `Scripts/Scripts`。
 
 ## 8. 规模速览（2026-09-06）
 
@@ -153,5 +156,5 @@ UI 表现与 LLM 链路自动测不到：Play 模式手测要点——主菜单�
 | 剧情链 | 数据造假案三幕、AI 专班、房子、父亲体检、挖角（中途辞职）、老康来信、初心对账 等 |
 | 任务模板 / 日常文案 / 新闻 | 50（×5 骨架）/ 117 / 118 |
 | 月度主题 | 12 节律 × md 循环 |
-| 测试 | EditMode 17 项全绿（含十年自动通关回归） |
+| 测试 | EditMode 22 项全绿（含十年自动通关回归、平衡探针、时钟/竞争者） |
 | 存档 | saveVersion 4（marks/echoQueue/clocks/plan/rival/ambition/poolLog） |

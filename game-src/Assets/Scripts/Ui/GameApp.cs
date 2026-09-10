@@ -19,7 +19,7 @@ namespace Starstate.Ui
         private string lastKind = "";
         private const int SaveVersion = 4;   // v4：Phase 4 叙事引擎（marks/回响/时钟/周计划/竞争者）
         private const string FontScaleKey = "starstate_font_scale";
-        private const string LlmKey = "starstate_llm_cfg2";   // v2：默认挂载 RP-LoRA（2026-09-06 作者选定）
+        private const string LlmKey = "starstate_llm_cfg3";   // v3：默认 autoStart=false、ctx=16384（降启动占用）
 
         // —— LLM ——
         private LlmConfig llm;
@@ -34,11 +34,31 @@ namespace Starstate.Ui
         private bool talkBusy;
         private int talkSession;        // 交谈会话号：关闭弹层后作废在途响应
 
+        // —— AI 家信 / 微信 ——
+        private bool letterBusy;
+        private int letterSession;
+
+        // —— 多存档槽：0=自动档，1–3=手动槽 ——
+        private int activeSlot;
+        private const int SlotCount = 3;
+
         private readonly System.Random uiRng = new System.Random();
 
-        private static string SavePath
+        private static string AutoPath
         {
             get { return Path.Combine(Application.persistentDataPath, "starstate_save.json"); }
+        }
+
+        private static string SlotPath(int slot)
+        {
+            return slot <= 0 ? AutoPath
+                : Path.Combine(Application.persistentDataPath, "starstate_save_s" + slot + ".json");
+        }
+
+        private static bool HasSlot(int slot)
+        {
+            try { return File.Exists(SlotPath(slot)); }
+            catch { return false; }
         }
 
         public void Init(UiRoot root)
@@ -48,7 +68,6 @@ namespace Starstate.Ui
             ui.OnPlanAdjusted += PlanAdjusted;
             ui.OnTabSwitched += t => { tab = t; RenderSide(); };
             ui.OnNewGame += StartNew;
-            ui.OnContinue += ContinueSave;
             ui.OnQuit += Quit;
             ui.OnFastForward += FastForward;
             ui.OnOpenSettings += () => ui.ShowSettings();
@@ -59,13 +78,15 @@ namespace Starstate.Ui
             ui.OnTalkClose += CloseTalk;
             ui.OnLlmApplied += OnLlmApplied;
             ui.OnLlmTest += TestLlm;
+            ui.OnContinueSlot += ContinueSlot;
+            ui.OnSnapshotSlot += SnapshotSlot;
 
             llm = LoadLlm();
             ui.SetLlmConfig(llm);
             if (llm.mode == "remote") llmReady = true;
             if (llm.enabled && llm.mode == "local" && llm.autoStart) KickServer("正在启动本地模型服务…");
             UpdateAiBadge();
-            ui.ShowMenu(CoreStateHasSave());
+            RefreshMenuSaves();
         }
 
         private void OnDestroy()
@@ -218,11 +239,17 @@ namespace Starstate.Ui
         private void RunTalkGeneration(string npcId, int session)
         {
             Func<bool> cancelled = () => session != talkSession;   // 弹层关闭即中止在途请求
-            StartCoroutine(ChatOnce(new[]
+            StartCoroutine(LlmClient.ChatStream(llm, new[]
             {
                 new ChatMsg { role = "system", content = LlmPrompt.System() },
                 new ChatMsg { role = "user", content = LlmPrompt.NpcTalkUser(st, npcId) },
-            }, 460,
+            }, 720,
+            partial =>
+            {
+                if (session != talkSession) return;
+                int n = partial != null ? partial.Length : 0;
+                ui.ShowTalkStatus("正在生成…（已 " + n + " 字）");
+            },
             content =>
             {
                 if (session != talkSession) return;    // 弹层已关闭，丢弃在途响应
@@ -337,21 +364,45 @@ namespace Starstate.Ui
             ui.SetLlmConfig(llm);
             UpdateAiBadge();
             ui.HideOverlays();
-            if (st != null) RenderAll(); else ui.ShowMenu(CoreStateHasSave());
+            if (st != null) RenderAll(); else RefreshMenuSaves();
         }
 
         private void ResetSave()
         {
-            try { if (File.Exists(SavePath)) File.Delete(SavePath); } catch { /* ignore */ }
+            try { if (File.Exists(SlotPath(activeSlot))) File.Delete(SlotPath(activeSlot)); } catch { /* ignore */ }
             st = null;
-            ui.SetSettingsHint("存档已重置。点击“返回”回到主菜单。");
-            ui.ShowMenu(false);
+            ui.SetSettingsHint("当前槽位存档已重置。点击“返回”回到主菜单。");
+            RefreshMenuSaves();
         }
 
-        private static bool CoreStateHasSave() => File.Exists(SavePath);
+        private void RefreshMenuSaves()
+        {
+            var slots = new System.Collections.Generic.List<int>();
+            var labels = new System.Collections.Generic.List<string>();
+            for (int i = 0; i <= SlotCount; i++)
+            {
+                if (!HasSlot(i)) continue;
+                slots.Add(i);
+                labels.Add(SlotLabel(i));
+            }
+            ui.ShowMenu(slots.ToArray(), labels.ToArray());
+        }
+
+        private static string SlotLabel(int slot)
+        {
+            string head = slot == 0 ? "自动档" : "槽位 " + slot;
+            try
+            {
+                var s = LoadFromPath(SlotPath(slot));
+                if (s == null) return head;
+                return head + " · " + s.date + " · " + (s.player != null ? s.player.name : "?") + " · " + s.grade;
+            }
+            catch { return head; }
+        }
 
         private void StartNew()
         {
+            activeSlot = PickFreeSlot();
             st = State.NewGame(ui.NameInput());
             st.saveVersion = SaveVersion;
             Flow.Begin(st);
@@ -361,13 +412,21 @@ namespace Starstate.Ui
             ui.ShowTutorial();   // 新局自动播放新手引导（主菜单也可重看）
         }
 
-        private void ContinueSave()
+        /// <summary>新局优先写入手动空槽（1–3），全满则覆盖自动档。</summary>
+        private int PickFreeSlot()
         {
-            st = Load();
+            for (int i = 1; i <= SlotCount; i++)
+                if (!HasSlot(i)) return i;
+            return 0;
+        }
+
+        private void ContinueSlot(int slot)
+        {
+            st = LoadFromPath(SlotPath(slot));
             if (st == null || st.saveVersion != SaveVersion)
             {
-                // 旧版本存档不兼容（存档结构已升级），留痕后开新局
                 ui.SetMenuHint("检测到旧版本存档（格式已升级到 v4），无法继续——已为你开始新的一局。");
+                activeSlot = slot;
                 st = State.NewGame(ui.NameInput());
                 st.saveVersion = SaveVersion;
                 Flow.Begin(st);
@@ -376,9 +435,35 @@ namespace Starstate.Ui
                 RenderAll();
                 return;
             }
+            activeSlot = slot;
             Npcs.Ensure(st);
             ui.HideOverlays();
             RenderAll();
+        }
+
+        /// <summary>把当前局快照到指定手动槽（1–3）。</summary>
+        private void SnapshotSlot(int slot)
+        {
+            if (st == null || slot < 1 || slot > SlotCount) return;
+            try
+            {
+                st.saveVersion = SaveVersion;
+                string json = JsonUtility.ToJson(st);
+                if (string.IsNullOrEmpty(json) || json.Length < 16) return;
+                string path = SlotPath(slot);
+                string tmp = path + ".tmp";
+                File.WriteAllText(tmp, json);
+                if (new FileInfo(tmp).Length >= 16)
+                {
+                    if (File.Exists(path)) File.Replace(tmp, path, null);
+                    else File.Move(tmp, path);
+                }
+                ui.SetSettingsHint("已快照到槽位 " + slot + "。");
+            }
+            catch (System.Exception e)
+            {
+                ui.SetSettingsHint("快照失败：" + e.Message);
+            }
         }
 
         private void Choose(int idx)
@@ -406,7 +491,7 @@ namespace Starstate.Ui
             {
                 new ChatMsg { role = "system", content = LlmPrompt.System() },
                 new ChatMsg { role = "user", content = LlmPrompt.WeekReviewUser(st) },
-            }, 140,
+            }, 280,
             content =>
             {
                 microBusy = false;
@@ -488,7 +573,86 @@ namespace Starstate.Ui
             ui.RenderMain(scene);
             RenderSide();
             MaybeMicro(scene);
+            MaybeAiMail();
             UpdateFfButton();
+        }
+
+        /// <summary>AI 家信：每月一次（周末/月结附近），失败静默；同时偶发同事微信进日志。</summary>
+        private void MaybeAiMail()
+        {
+            if (st == null || llm == null || !llm.enabled || !llmReady || letterBusy) return;
+            if (st.phase != Phase.Weekend && st.phase != Phase.MonthEnd && st.phase != Phase.WeekEnd) return;
+            if (st.date == null || st.date.Length < 7) return;
+            string key = st.date.Substring(0, 7);
+            if (st.lastLetterMonth == key) return;
+            var d = GameClock.Parse(st.date);
+            if (d.Day > 14) { st.lastLetterMonth = key; Save(); return; }   // 月下半段不再打扰
+            st.lastLetterMonth = key;
+            Save();
+            letterBusy = true;
+            letterSession++;
+            int session = letterSession;
+            StartCoroutine(RequestFamilyLetter(session));
+        }
+
+        private IEnumerator RequestFamilyLetter(int session)
+        {
+            yield return LlmClient.Chat(llm, new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.FamilyLetterUser(st) },
+            }, 360,
+            content =>
+            {
+                if (session != letterSession || st == null) { letterBusy = false; return; }
+                letterBusy = false;
+                string text = StripPlain(content);
+                if (string.IsNullOrEmpty(text)) return;
+                st.AddLog("家书", text);
+                Save();
+                // 有结果页时补一段；否则只进日志，不打断主叙事
+                if (st.hasPending) ui.AppendBodyPara("—— 家里来信 ——" + text);
+                RenderSide();
+                MaybeWeChat();
+            },
+            e => { letterBusy = false; });
+        }
+
+        private void MaybeWeChat()
+        {
+            if (st == null || llm == null || !llm.enabled || !llmReady) return;
+            if (uiRng.NextDouble() > 0.35) return;
+            string npcId = PickCloseNpc();
+            if (npcId == null) return;
+            StartCoroutine(LlmClient.Chat(llm, new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.WeChatUser(st, npcId) },
+            }, 120,
+            content =>
+            {
+                if (st == null) return;
+                string text = StripPlain(content);
+                if (string.IsNullOrEmpty(text)) return;
+                st.AddLog("微信", Npcs.Name(npcId) + "：" + text);
+                Save();
+                RenderSide();
+            },
+            e => { /* 静默 */ }));
+        }
+
+        private string PickCloseNpc()
+        {
+            string best = null;
+            int bestF = 3;   // 太生疏的不私聊
+            foreach (var id in Npcs.Order)
+            {
+                if (id == "ma") continue; // 领导不发闲聊微信
+                var r = Npcs.Get(st, id);
+                if (r.familiar > bestF) { bestF = r.familiar; best = id; }
+            }
+            if (best == null && Npcs.Order.Length > 0) best = Npcs.Order[0];
+            return best;
         }
 
         /// <summary>推进按钮可用性：结果页/结构阶段/日常可推进；剧情与动态抉择事件必须玩家亲自选。</summary>
@@ -554,21 +718,20 @@ namespace Starstate.Ui
             st.saveVersion = SaveVersion;
             string json = JsonUtility.ToJson(st);   // 紧凑格式：比 pretty 更快、文件更小
             if (string.IsNullOrEmpty(json) || json.Length < 16) return;
-            System.Threading.ThreadPool.QueueUserWorkItem(_ => WriteSaveAtomic(json));
+            int slot = activeSlot;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => WriteSaveAtomic(json, slot));
         }
 
-        private static void WriteSaveAtomic(string json)
+        private static void WriteSaveAtomic(string json, int slot)
         {
             if (string.IsNullOrEmpty(json) || json.Length < 16) return;
             lock (SaveLock)
             {
                 try
                 {
-                    string tmp = SavePath + ".tmp";
-                    File.WriteAllText(tmp, json);
-                    if (new FileInfo(tmp).Length < 16) return;   // 落盘校验
-                    if (File.Exists(SavePath)) File.Replace(tmp, SavePath, null);
-                    else File.Move(tmp, SavePath);
+                    WriteOneAtomic(json, SlotPath(slot));
+                    // 手动槽同步镜像一份到自动档，便于“继续”总能回到最新进度
+                    if (slot > 0) WriteOneAtomic(json, AutoPath);
                 }
                 catch (System.Exception e)
                 {
@@ -577,19 +740,29 @@ namespace Starstate.Ui
             }
         }
 
+        private static void WriteOneAtomic(string json, string path)
+        {
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, json);
+            if (new FileInfo(tmp).Length < 16) return;   // 落盘校验
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
+        }
+
         /// <summary>退出/销毁时同步兜底：确保最后一次状态落盘。</summary>
         private void FlushSaveSync()
         {
             if (st == null) return;
-            try { st.saveVersion = SaveVersion; WriteSaveAtomic(JsonUtility.ToJson(st)); }
+            try { st.saveVersion = SaveVersion; WriteSaveAtomic(JsonUtility.ToJson(st), activeSlot); }
             catch { /* 兜底失败不阻断退出 */ }
         }
 
-        private GameState Load()
+        private static GameState LoadFromPath(string path)
         {
             try
             {
-                string raw = File.ReadAllText(SavePath);
+                if (!File.Exists(path)) return null;
+                string raw = File.ReadAllText(path);
                 // 上古存档没有 saveVersion 字段，JsonUtility 会用字段默认值顶替版本门槛——直接判不兼容
                 if (!raw.Contains("\"saveVersion\"")) return null;
                 return JsonUtility.FromJson<GameState>(raw);

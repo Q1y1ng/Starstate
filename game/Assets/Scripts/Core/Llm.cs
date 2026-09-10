@@ -22,9 +22,9 @@ namespace Starstate.Core
         public string modelPath = "D:/AI/models/Ornith-1.5-9B-Heretic-Q4_K_M/Ornith-1.5-9B-Uncensored-Q4_K_M.gguf";
         public string loraPath = "D:/AI/models/Qwen3.5-9B-NSFW-RP-LoRA/NSFW-RP-RolePlay.qwen3.5-9b.q8_0.gguf"; // 默认挂载 RP-LoRA（作者选定：对话最鲜活）
         public int port = 8817;
-        public int ctx = 65536;                  // 64K 上下文（Ornith-1.5-9B）
+        public int ctx = 16384;                  // 16K：单次短 prompt 足够；64K 会令启动占满内存/显存
         public float temperature = 0.9f;
-        public bool autoStart = true;            // 本地模式下自动拉起 llama-server
+        public bool autoStart = false;           // 默认不启动即加载；首次交谈/测试连接时再唤醒
     }
 
     [Serializable]
@@ -133,6 +133,30 @@ namespace Starstate.Core
                 taken++;
             }
             sb.Append("【任务】你是科长周衡之（严谨、护短、话少而准）。写周五例会散会后你对这位科员说的一两句点评：结合本周的真实计划与事件，具体、克制，带一点难得的肯定或一句点到为止的提醒。不超过60字。");
+            return sb.ToString();
+        }
+
+        /// <summary>月末家信（父母来信，纯文本）。引用真实住房/婚恋/职级状态，克制温情。</summary>
+        public static string FamilyLetterUser(GameState st)
+        {
+            var d = GameClock.Parse(st.date);
+            var sb = new StringBuilder();
+            string family = st.hasChild ? "已婚有孩" : st.married ? "已婚" : string.IsNullOrEmpty(st.partner) ? "单身" : "与" + st.partner + "恋爱中";
+            sb.Append($"【日期】{GameClock.FmtFull(d)}；玩家：{st.player.name}，{st.grade}，{st.player.post}；住房{st.housing}，{family}；士气{st.player.morale}，压力{st.player.stress}。【纯文本】\n");
+            if (d.Month == 1 || d.Month == 2) sb.Append("【时令】临近春节，信里会带一点年味。\n");
+            else if (d.Month == 9) sb.Append("【时令】入秋，父母会关心工作是否忙、身体是否吃得消。\n");
+            sb.Append("【任务】以父母口吻写一封家信（母亲执笔、父亲补一两句的感觉）：嘘寒问暖但不啰嗦，会提到一件家中具体小事（邻居、天气、腌菜、体检、老同事等），结尾叮嘱保重身体。不要问游戏数值，不要出戏，不要网络梗。不超过120字。");
+            return sb.ToString();
+        }
+
+        /// <summary>同事微信短讯（纯文本）：从熟悉度较高的 NPC 里抽一人，写 1–2 条工作外的闲话。</summary>
+        public static string WeChatUser(GameState st, string npcId)
+        {
+            var def = Npcs.Defs.ContainsKey(npcId) ? Npcs.Defs[npcId] : new Npcs.Def { name = "同事", title = "同事", grade = "", traits = "普通" };
+            var r = Npcs.Get(st, npcId);
+            var sb = new StringBuilder();
+            sb.Append($"【日期】{st.date}；发送人：{def.name}（{def.title}），性格：{def.traits}；熟悉{r.familiar}/100，信任{r.trust}。【纯文本】\n");
+            sb.Append("【任务】写 1—2 条微信消息（可用“对方正在输入…”不必），像同事下班后的闲聊：吐槽食堂、约周末、转发新闻、问材料进展皆可。口语化、短句，不要表情包堆砌，不要超过80字。");
             return sb.ToString();
         }
 

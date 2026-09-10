@@ -26,7 +26,17 @@ namespace Starstate.Ui
             yield return LlmClient.HealthPoll(cfg, 4f, s => { }, ok => healthy = ok);
             if (healthy) { done(true); yield break; }
 
-            // ② 找运行时与模型
+            // ② 已有启动在途（自动拉起中点测试/交谈）：只等结果，禁止双开
+            if (starting)
+            {
+                bool waitOk = false, waitSettled = false;
+                yield return WaitForInFlightStart(cfg, status, r => { waitOk = r; waitSettled = true; });
+                while (!waitSettled) yield return null;
+                done(waitOk);
+                yield break;
+            }
+
+            // ③ 找运行时与模型
             string exe = ResolveExe(cfg);
             if (exe == null)
             {
@@ -42,15 +52,19 @@ namespace Starstate.Ui
                 yield break;
             }
 
-            // ③ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告）——
+            // ④ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告）——
             //    9B 模型在本机（RTX 3060 6GB）标定值：-ngl 28 固定 + KV 双 q4_0 量化 + ub128 + fa on + t16 绑核；
             //    失败才降档（显存极端不足时），保证总能跑起来。
+            //    starting 必须在 Process.Start 之前置位，否则并发 EnsureRunning 会双开（内存打满事故）。
             string threads = " -t 16 --cpu-range 0-19 -ub 128 -fa on";
             string[] labels = { "标定配置（ngl28·KV q4_0 量化）", "降档（ngl16·KV q8_0）", "纯CPU" };
             int[] ngls = { 28, 16, 0 };
-            int[] ctxs = { cfg.ctx, Math.Min(cfg.ctx, 32768), Math.Min(cfg.ctx, 16384) };
+            int baseCtx = Math.Max(1024, Math.Min(cfg.ctx, 65536));
+            int[] ctxs = { baseCtx, Math.Min(baseCtx, 32768), Math.Min(baseCtx, 16384) };
             string[] kvTypes = { "q4_0", "q8_0", "q8_0" };
             var seen = new HashSet<string>();
+
+            starting = true;
             for (int a = 0; a < labels.Length; a++)
             {
                 string args = "-m \"" + gguf + "\" --host 127.0.0.1 --port " + cfg.port +
@@ -60,15 +74,6 @@ namespace Starstate.Ui
                               " --jinja --reasoning off";   // 关闭思维链：正文直接输出（--reasoning off 为 b10343 规范开关）
                 if (!string.IsNullOrEmpty(cfg.loraPath) && File.Exists(cfg.loraPath))
                     args += " --lora \"" + cfg.loraPath + "\"";
-                if (starting)
-                {
-                    // 已有另一处在启动（如自动拉起中点测试连接）：不重复拉起，只等健康
-                    bool waitOk = false, waitSettled = false;
-                    yield return PollWithExitWatch(cfg, proc, 240f, status, r => { waitOk = r; waitSettled = true; });
-                    while (!waitSettled) yield return null;
-                    done(waitOk);
-                    yield break;
-                }
                 if (!seen.Add(args)) continue;
 
                 status("正在启动本地模型服务（" + labels[a] + "，上下文 " + ctxs[a] + "）…");
@@ -86,6 +91,7 @@ namespace Starstate.Ui
                 }
                 catch (Exception e)
                 {
+                    starting = false;
                     status("启动 llama-server 失败：" + e.Message);
                     done(false);
                     yield break;
@@ -93,19 +99,52 @@ namespace Starstate.Ui
 
                 // 等模型加载；进程提前退出（如显存不足）立即换下一档
                 bool ok = false, settled = false;
-                starting = true;
                 yield return PollWithExitWatch(cfg, proc, 240f, status, r => { ok = r; settled = true; });
                 while (!settled) yield return null;
-                starting = false;
                 if (ok)
                 {
+                    starting = false;
                     status("本地模型已就绪（" + labels[a] + "）：" + Path.GetFileName(gguf));
                     done(true);
                     yield break;
                 }
                 Kill();
             }
+            starting = false;
             status("各档启动配置均失败，AI 增强暂不可用（游戏照常运行）。");
+            done(false);
+        }
+
+        /// <summary>等待另一路 EnsureRunning 完成：健康即成功；starting 结束仍未就绪则失败。</summary>
+        private static IEnumerator WaitForInFlightStart(LlmConfig cfg, Action<string> status, Action<bool> done)
+        {
+            float t = 0f;
+            string url = LlmClient.HealthUrl(cfg);
+            while (t < 240f)
+            {
+                using (var web = UnityEngine.Networking.UnityWebRequest.Get(url))
+                {
+                    web.timeout = 3;
+                    var op = web.SendWebRequest();
+                    while (!op.isDone) yield return null;
+                    if (web.result == UnityEngine.Networking.UnityWebRequest.Result.Success && web.responseCode < 300)
+                    {
+                        done(true);
+                        yield break;
+                    }
+                }
+                if (!starting)
+                {
+                    // 启动流程已结束仍未健康：确认一次后判失败
+                    bool h = false;
+                    yield return LlmClient.HealthPoll(cfg, 4f, s => { }, ok => h = ok);
+                    done(h);
+                    yield break;
+                }
+                status("正在等待本地模型就绪…（另一启动流程进行中，" + (int)t + "s）");
+                yield return new WaitForSecondsRealtime(2f);
+                t += 2f;
+            }
             done(false);
         }
 
