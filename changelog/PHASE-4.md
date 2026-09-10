@@ -203,3 +203,19 @@
 - Git：`8589fcf` 补丁十三规范提交；`.gitignore` 增加 `builds/`。
 
 **接手者注意**：同步 `game-src`→`game` 时用 robocopy/cp 到 `Scripts/` 目录内容，**不要**把 `Scripts` 整夹拷成 `Scripts/Scripts`（会重复 asmdef 直接炸编译）；新事件 id 全局唯一；时钟 `onFull` 事件必须 `when=null`。
+
+## 补丁十四 · 设置页重做 / LLM 防双开 / 周末文案去重（2026-09-11）
+
+**起因**：作者实机截图反馈——①设置页内容挤、排版差、难退出；②大模型连接慢/连不上/内存不合理；③周末“这一周”同一句拼两遍。
+
+| 问题 | 根因 | 修复 |
+| --- | --- | --- |
+| 设置难退出 | 卡片绝对定位 780px，小屏底栏被裁；无 ESC/点遮罩 | 重做：屏高自适应卡片、**固定头（关闭）+ 底栏（返回）**、正文 ScrollRect；ESC 与点遮罩关闭 |
+| 排版乱 | 路径输入与常用开关混在同层 | 分区卡片：显示 / 存档 / AI 接入 / AI 高级（路径） |
+| LLM 内存爆 | 健康检查 4s 失败即 `Process.Start`——已有外部实例或本进程加载中会**双开**（16GB 装不下两个 9B） | `EnsureRunning` 分层：①健康即用 ②本进程已拉起只等待 ③in-flight 等待 ④**端口占用或系统已有 llama-server → 只等健康，禁止 Start** ⑤才拉新进程 |
+| 连接“连不上” | 双开争抢后两边都起不来；测试连接有时绕过 EnsureRunning | 测试连接始终走 EnsureRunning；状态文案标明“已有服务只等待、不双开” |
+| 周末重复 | `PlanGrowth` 每周固定同一句家信日志 + `WeekendScene` 原样拼最近两条 | 家信日志按周轮换 4 句；周末“这一周”按前 20 字去重 |
+
+**验证**：独立编译 `ALL_OK`；EditMode **23/23**（新增 `Weekend_Recent_Log_Dedups_Same_Line`）。
+
+**接手者注意**：任何“启动本地服务”路径必须先过 `PortBusy` / `CountForeignLlama`；`Kill()` 只回收本进程拉起的实例，外部服务不碰。

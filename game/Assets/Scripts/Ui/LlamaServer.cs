@@ -20,13 +20,24 @@ namespace Starstate.Ui
 
         public static IEnumerator EnsureRunning(LlmConfig cfg, Action<string> status, Action<bool> done)
         {
-            // ① 已有服务在跑（外部启动过）→ 直接用
+            // ① 已有服务在跑（外部启动过 / 本进程已拉起）→ 健康即直接用
             status("正在检查本地模型服务…");
             bool healthy = false;
             yield return LlmClient.HealthPoll(cfg, 4f, s => { }, ok => healthy = ok);
             if (healthy) { done(true); yield break; }
 
-            // ② 已有启动在途（自动拉起中点测试/交谈）：只等结果，禁止双开
+            // ② 本进程已拉起但尚未健康：只等待，禁止再 Start（防双开吃满内存）
+            if (proc != null && !proc.HasExited)
+            {
+                bool ok2 = false, settled2 = false;
+                status("本地服务已在启动，等待模型加载…");
+                yield return PollWithExitWatch(cfg, proc, 240f, status, r => { ok2 = r; settled2 = true; });
+                while (!settled2) yield return null;
+                done(ok2);
+                yield break;
+            }
+
+            // ③ 已有启动在途（自动拉起中点测试/交谈）：只等结果，禁止双开
             if (starting)
             {
                 bool waitOk = false, waitSettled = false;
@@ -36,7 +47,22 @@ namespace Starstate.Ui
                 yield break;
             }
 
-            // ③ 找运行时与模型
+            // ④ 端口被占或系统里已有 llama-server：外部实例，只等健康，绝不双开
+            int foreign = CountForeignLlama();
+            if (PortBusy(cfg.port) || foreign > 0)
+            {
+                status("检测到已有 llama-server（端口 " + cfg.port + (foreign > 0 ? "，进程×" + foreign : "") +
+                       "），等待其就绪…（禁止双开）");
+                bool waitOk = false, waitSettled = false;
+                yield return PollWithExitWatch(cfg, null, 180f, status, r => { waitOk = r; waitSettled = true; });
+                while (!waitSettled) yield return null;
+                if (waitOk) { done(true); yield break; }
+                status("已有服务端口占用但健康检查失败。请在任务管理器结束 llama-server 后重试，或检查端口/路径设置。");
+                done(false);
+                yield break;
+            }
+
+            // ⑤ 找运行时与模型
             string exe = ResolveExe(cfg);
             if (exe == null)
             {
@@ -52,7 +78,7 @@ namespace Starstate.Ui
                 yield break;
             }
 
-            // ④ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告）——
+            // ⑥ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告）——
             //    9B 模型在本机（RTX 3060 6GB）标定值：-ngl 28 固定 + KV 双 q4_0 量化 + ub128 + fa on + t16 绑核；
             //    失败才降档（显存极端不足时），保证总能跑起来。
             //    starting 必须在 Process.Start 之前置位，否则并发 EnsureRunning 会双开（内存打满事故）。
@@ -113,6 +139,42 @@ namespace Starstate.Ui
             starting = false;
             status("各档启动配置均失败，AI 增强暂不可用（游戏照常运行）。");
             done(false);
+        }
+
+        /// <summary>端口是否已被占用（被占则禁止再拉第二个实例）。</summary>
+        private static bool PortBusy(int port)
+        {
+            try
+            {
+                var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+                listener.Start();
+                listener.Stop();
+                return false;
+            }
+            catch { return true; }
+        }
+
+        /// <summary>系统中其它 llama-server 进程数（排除本类已跟踪的 proc）。</summary>
+        private static int CountForeignLlama()
+        {
+            int n = 0;
+            try
+            {
+                int selfId = 0;
+                try { if (proc != null && !proc.HasExited) selfId = proc.Id; } catch { /* ignore */ }
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("llama-server"))
+                {
+                    try
+                    {
+                        if (selfId != 0 && p.Id == selfId) continue;
+                        n++;
+                    }
+                    catch { /* ignore */ }
+                    finally { try { p.Dispose(); } catch { /* ignore */ } }
+                }
+            }
+            catch { /* 权限等 */ }
+            return n;
         }
 
         /// <summary>等待另一路 EnsureRunning 完成：健康即成功；starting 结束仍未就绪则失败。</summary>

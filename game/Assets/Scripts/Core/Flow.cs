@@ -431,11 +431,17 @@ namespace Starstate.Core
                 "周末两天。机关的周末属于自己——怎么过，也是一种选择。",
                 "（休整回精力降压力；加班攒评价耗精力；其余各有各的长进。）",
             };
-            // 上下文化：把这一周真实发生的事带进周末的语境
+            // 上下文化：把这一周真实发生的事带进周末的语境（去重，避免同文案连排）
             var recent = new List<string>();
+            var seenKeys = new HashSet<string>();
             for (int i = st.log.Count - 1; i >= 0 && recent.Count < 2; i--)
-                if (st.log[i].kind != "系统" && !string.IsNullOrEmpty(st.log[i].text))
-                    recent.Add(st.log[i].text);
+            {
+                var entry = st.log[i];
+                if (entry.kind == "系统" || string.IsNullOrEmpty(entry.text)) continue;
+                string key = entry.text.Length > 20 ? entry.text.Substring(0, 20) : entry.text;
+                if (!seenKeys.Add(key)) continue;
+                recent.Add(entry.text);
+            }
             if (recent.Count > 0) paras.Insert(1, "这一周：" + string.Join("；", recent.ToArray()) + "。");
             return new Scene
             {
@@ -711,9 +717,29 @@ namespace Starstate.Core
                 }
             }
             if (p.family > 0)
-                st.AddLog("人物", string.IsNullOrEmpty(st.partner)
-                    ? "你给家里打了几个电话，母亲絮叨了半天饭菜"
-                    : "你把两个晚上留给了" + st.partner + "和家里");
+            {
+                // 按周轮换，避免连续数周同一句被周末“这一周”原样拼接
+                if (string.IsNullOrEmpty(st.partner))
+                {
+                    string[] lines =
+                    {
+                        "你给家里打了几个电话，母亲絮叨了半天饭菜",
+                        "你往家里拨了电话，父亲惜字如金，母亲把邻居的事讲了两遍",
+                        "你给家里去了电话，母亲问你吃没吃饭，你答了两次“吃了”",
+                        "周末前你给家里打电话，听筒里是电视声和母亲的唠叨",
+                    };
+                    st.AddLog("人物", lines[((st.week.index % lines.Length) + lines.Length) % lines.Length]);
+                }
+                else
+                {
+                    string[] lines =
+                    {
+                        "你把两个晚上留给了" + st.partner + "和家里",
+                        "你陪" + st.partner + "回了趟家，饭桌上全是闲话",
+                    };
+                    st.AddLog("人物", lines[st.week.index % lines.Length]);
+                }
+            }
         }
 
         /// <summary>把本周的精力分配讲成一句话（周五点评用）。</summary>

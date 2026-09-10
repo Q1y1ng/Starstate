@@ -122,5 +122,28 @@ namespace Starstate.Tests
             }
             Assert.IsTrue(saw, "2027-03-14 应触发许飞报告事件");
         }
+
+        [Test]
+        public void Weekend_Recent_Log_Dedups_Same_Line()
+        {
+            var st = State.NewGame("周末测试员");
+            st.phase = Phase.Weekend;
+            st.date = "2026-09-12";
+            st.log.Clear();
+            st.AddLog("人物", "你给家里打了几个电话，母亲絮叨了半天饭菜");
+            st.AddLog("人物", "你给家里打了几个电话，母亲絮叨了半天饭菜");
+            st.AddLog("人物", "科里加班核了一份台账");
+            var scene = Flow.CurrentScene(st);
+            string joined = string.Join("\n", scene.paras.ToArray());
+            int n = 0;
+            int idx = 0;
+            while ((idx = joined.IndexOf("你给家里打了几个电话", idx, System.StringComparison.Ordinal)) >= 0)
+            {
+                n++;
+                idx += 4;
+            }
+            Assert.AreEqual(1, n, "周末“这一周”不应把同一条日志拼两遍：\n" + joined);
+            Assert.IsTrue(joined.Contains("科里加班核了一份台账"));
+        }
     }
 }

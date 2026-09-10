@@ -162,14 +162,13 @@ namespace Starstate.Ui
 
         private IEnumerator TestFlow()
         {
-            if (!LlamaServer.Running)
-            {
-                bool ok = false, settled = false;
-                yield return LlamaServer.EnsureRunning(llm, s => ui.ShowLlmStatus(s), r => { ok = r; settled = true; });
-                while (!settled) yield return null;
-                llmReady = ok;
-                if (!ok) { ui.ShowLlmStatus("✗ 本地服务未能就绪（见上方提示）。"); yield break; }
-            }
+            // 始终走 EnsureRunning：已有外部实例/加载中只会等待，不会双开
+            bool ok = false, settled = false;
+            yield return LlamaServer.EnsureRunning(llm, s => ui.ShowLlmStatus(s), r => { ok = r; settled = true; });
+            while (!settled) yield return null;
+            llmReady = ok;
+            UpdateAiBadge();
+            if (!ok) { ui.ShowLlmStatus("✗ 本地服务未能就绪（见上方提示）。"); yield break; }
             yield return TestChat();
         }
 
