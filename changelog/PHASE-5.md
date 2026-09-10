@@ -1,9 +1,29 @@
 # Phase 5 · 市长办公桌（Papers Please 压力驱动）
 
-> 规格：[docs/compose/spec/papers-desk-overhaul.md](../docs/compose/spec/papers-desk-overhaul.md)
-> 起点：七品·大同市市长（41 岁，最快合规轨），2026-09
+> 规格：[docs/compose/spec/papers-desk-overhaul.md](../docs/compose/spec/papers-desk-overhaul.md)  
+> 起点：七品·大同市市长（41 岁，最快合规轨），2026-09  
+> **当前版本：STARSTATE v0.2.6 Preview** · EditMode **37/37** · 存档 saveVersion **5** · main `4491a87`
 
-## v0.2.6 · 市长时钟恢复＋DeskSurface 拆分＋手写再补（2026-09-10）
+## 状态快照（v0.2.6）
+
+| 轴 | 状态 |
+| --- | --- |
+| 玩法 | 卷宗签批（翻页/核对/处置）＋两把尺＋口径案头＋常委密谈＋考核/巡视时钟 |
+| 内容 | 手写 Y1 约 16 件＋教学/高光 6＋Generator 模板池 36；对上报告/算法审批链＋风险回响 |
+| UI | 木纹桌面（DeskSurface）/红头卷宗/签批章/常委会权力板/口径页签；版本 v0.2.6 Preview |
+| 工程 | 独立编译 ALL_OK；Windows 包已重打；科员线归档 `archive/phase1-4-clerk/` |
+| 待定 | **平衡等作者实机 Play 后再标定**；DeskRoot 完整拆分；内容精修 |
+
+### 作者拍板（2026-09-10）
+
+1. **Git**：授权直接在 main commit（不 push）→ `c76c612` / `4491a87`
+2. **Windows 包**：删旧打新 → `E:/Starstate/builds/Starstate/Starstate.exe`
+3. **科员线**：压缩归档，不删除，视后续再迁
+4. **平衡**：等 Play 反馈后再动两把尺/晋升门槛
+
+---
+
+## v0.2.6 · 市长时钟恢复＋DeskSurface 拆分＋手写再补＋归档打包（2026-09-10）
 
 | 模块 | 内容 |
 | --- | --- |
@@ -180,12 +200,12 @@
 - `tools/check-compile.sh` → **ALL_OK**
 - Unity EditMode → **23 Passed / 0 Failed / 5 Skipped**（跳过=旧时钟内容）
 
-### 已知缺口（下一刀）
+### 已知缺口（M0 时点；多数已在 v0.2.x 关闭）
 
-1. ~~办公桌壳未拆 `UiRoot`~~ → v0.2 已做木纹/灯晕/权力板雏形；完整 DeskRoot 拆分与 RulebookPanel 待做
-2. 第一年内容密度不足（仅 9 件手写＋3 件池）
-3. 旧 ContentYears/Chains/Clocks 未迁移；P4 时钟/竞争者测试暂 Ignore
-4. 平衡未标定（两把尺扣分与晋升门槛需实机手玩）
+1. ~~办公桌壳未拆 `UiRoot`~~ → v0.2 木纹/灯晕；v0.2.6 DeskSurface 已拆；完整 DossierView/PowerBoard 仍并存 UiRoot
+2. ~~第一年内容密度不足~~ → v0.2.5–0.2.6 手写 16＋池 36
+3. ~~旧 ContentClocks 未迁移~~ → ContentClocksMayor＋测试 37/37；科员线整体归档
+4. 平衡未标定（两把尺扣分与晋升门槛**待作者实机**）
 
 ### 工程备忘
 
