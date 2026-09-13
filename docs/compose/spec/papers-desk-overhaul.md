@@ -287,8 +287,8 @@ class DossierIssue {
 | --- | --- | --- |
 | **M0 垂直切片** | Dossier 引擎＋办公桌壳＋序章三幕＋教学件 3＋高光件 5＋PowerBoard 雏形＋NewGame 七品 | 能完整玩「就任→第一周五日」；埋雷可查可漏；两把尺动 |
 | **M1 第一年** | 第一年手写卷宗 40＋核心 NPC 对话＋2 条完整链＋口径手册可切换 | 十月内无断档；巡视/考核各 1 次 |
-| **M2 内容量** | DossierGenerator 上量＋新闻/氛围 LLM＋旧链迁移 | 三年自动回归；池不枯竭 |
-| **M3 收口** | 六品晋升与全部结局＋平衡＋Windows 包 | EditMode 全绿；实机 2 小时不枯燥主观验收 |
+| **M2 内容量** ✅ | 模板 14→34＋模板挂链 7 条＋每日氛围与批示涓色 LLM＋旧链迁移（配偶从业/医疗打招呼） | 已完成：探针四策略十年长跑无断档；模板池 34 不枯竭 |
+| **M3 收口** ✅ | 风险账本＋立案审查/免职/降级三个新结局＋考核分级＋平衡标定＋Windows 包 | 已完成：EditMode 95/95 全绿；九种结局均可达成（实机 2 小时主观验收仍需人测） |
 
 ## [S3] Out of Scope
 
@@ -307,7 +307,7 @@ class DossierIssue {
 - [ ] T4: DeskRoot/DeskSurface/DossierView 办公桌壳（拆 UiRoot，程序纹理）— acceptance: 金路径可玩；同签名不重建；ESC/返回可用 (covers: S2.7)  **DeskSurface 已拆出；DossierView/PowerBoard 仍在 UiRoot**
 - [ ] T5: PowerBoard＋RulebookPanel＋两把尺仪表 — acceptance: 常委会关系可见；口径切换影响核对线索 (covers: S2.6; S2.7; S2.9)  **权力板＋口径手册已上（案头4槽/检索/DeskHint）**
 - [x] T6: NPC 市级权力地形数据＋Talk 迁移 — acceptance: 至少 6 名常委可密谈且关系写入存档 (covers: S2.9)
-- [ ] T7: 第一年卷宗包与 2 条剧情链（对上报告、算法审批）— acceptance: 2026-09 至 2027-08 无空窗；链可分叉 (covers: S2.6; S2.10)  **手写 Y1 16 件＋池36＋两链+风险回响；精修待补**
-- [ ] T8: DossierGenerator 模板上量＋周末/氛围 LLM 接线 — acceptance: 随机卷宗连续 30 天无重复 id；LLM 失败回退 (covers: S2.6; S2.8)  **Generator SeedPool(36)；LLM 市长层提示词已接**
+- [x] T7: 第一年卷宗包与 2 条剧情链（对上报告、算法审批）— acceptance: 2026-09 至 2027-08 无空窗；链可分叉 (covers: S2.6; S2.10)  **M1 达成：手写 40 件＋链 14 条**
+- [x] T8: DossierGenerator 模板上量＋周末/氛围 LLM 接线 — acceptance: 随机卷宗连续 30 天无重复 id；LLM 失败回退 (covers: S2.6; S2.8)  **M2 达成：模板 14→34＋模板挂链 7 条；每日氛围与批示涓色均带确定性回退**
 - [x] T9: 十年回归与平衡探针适配七品路径 — acceptance: EditMode 全绿含十年自动通关 (covers: S2.11)  **37/37；另加 DossierBalanceTest**
-- [ ] T10: changelog/HANDOFF/README 同步＋Windows 包 — acceptance: 文档与包路径一致 (covers: S2.12; S2.13)  **文档已同步；Windows 包待做**
+- [x] T10: changelog/HANDOFF/README 同步＋Windows 包 — acceptance: 文档与包路径一致 (covers: S2.12; S2.13)  **M3 达成：`E:/Starstate/builds/Starstate` 已重打**

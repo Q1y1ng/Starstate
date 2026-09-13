@@ -19,7 +19,7 @@
 | Phase 2 | 基础构建：核心系统＋序章＋2026年9月切片（M0） | ✅ 完成 |
 | Phase 3 | 十年完整版：晋升/考核/路线/结局/快进＋十年内容＋新闻栏＋大模型增强层 | ✅ 收口（EditMode 12/12 全绿，含九个补丁，见 changelog/PHASE-3.md 总览） |
 | Phase 4 | 从"事件轮播"到"活的人生"：回响引擎＋周计划＋档案公文美学＋内容大填充 | ✅ 完成（EditMode 17/17 全绿，见 changelog/PHASE-4.md） |
-| Phase 5 | 市长办公桌：七品开局＋卷宗签批＋两把尺＋Papers Please 压力（v0.2 Preview） | 🔶 M0＋v0.2.x 完成（EditMode 37/37 全绿，见 changelog/PHASE-5.md） |
+| Phase 5 | 市长办公桌：七品开局＋卷宗签批＋两把尺＋Papers Please 压力（v0.2 Preview） | 🔶 M0＋M1＋**M2（内容量/迁移）**＋**M3（全部结局/平衡/Windows 包）**完成（EditMode 95/95 全绿，见 changelog/PHASE-5.md、docs/AUDIT-2026-09-12.md） |
 
 **技术栈**：Unity 2022.3.57f1c2（本机编辑器，升级路径 Unity 6 LTS）+ C#。模拟核心（`Core/`）为纯 C#、不依赖 UnityEngine，保证可测试可迁移；UGUI 由代码构建；中文渲染用 OS 字体。另有**大模型增强层**（本地 llama-server 或 OpenAI 兼容 API：NPC 交谈＋AI 日常小事件，效果白名单制、可整体关闭，详见 changelog/PHASE-3.md 补丁四）。详见 [docs/PHASE3-DESIGN.md](docs/PHASE3-DESIGN.md)。
 

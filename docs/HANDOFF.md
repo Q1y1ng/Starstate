@@ -13,7 +13,7 @@
 | --- | --- |
 | Phase 1-4 | 完成（2026-09-06） |
 | Phase 5 | M0＋v0.2.x：卷宗引擎/七品开局/木纹桌面/口径/模板池/常委密谈/两条链（2026-09-10） |
-| 测试 | EditMode **30 Passed / 0 Failed / 5 Skipped**（跳过=旧 ContentClockRival） |
+| 测试 | EditMode **95 Passed / 0 Failed / 0 Skipped**（12 审计回归 ＋ 11 剧情线路 ＋ 11 内容量验收 ＋ 24 M2/M3 验收） |
 | 存档 | **saveVersion 5**；旧档引导重开 |
 | 编译 | `tools/check-compile.sh` → ALL_OK |
 
@@ -27,6 +27,14 @@
 | `Rulebook.cs` | 案头 4 槽顶旧、检索、DeskHint | `knownRules` vs `deskRules` |
 | `ContentDossierM0/Y1` | 教学3＋高光3＋池＋季节件 | 高光 marks 驱动链 |
 | `ContentChainsMayor` | 对上报告 / 算法审批 | `requireMarks` 是 **AND**，分叉拆事件 id |
+| `ContentRoutesMayor` | **剧情线路（M1）**：路线确立＋四线（12 环）＋常委会/竞争/邀约链 | md 事件每年会重现 → 每环必须自带 `requireNotMarks` 完成标记；路线分叉一律用 marks（`When.route` 只对 date 触发生效） |
+| `ContentDossierRoutes` | 四件路线专属卷宗 | 路线处置用 `whenMark` 锁，`lockReason` 写解锁条件 |
+| `ContentDossierY2` | 手写卷宗第二辑 10 件（M1 内容量） | `generated` 只对模板件为 true（手写件勿标，否则内容量审计会漏计） |
+| `ContentChainsRisk` | 安全事故瞒报压力链＋招商引资对赌链 | 同一节拍的分叉用不同事件 id ＋族标记（宽/严两条对赌线靠卷宗同时写具体标记与族标记） |
+| `ContentTemplateChains` | **模板挂链**：模板件灰区标记的延迟回响（7 条） | 模板件也能有后果——标记名与 `DossierTemplatesY2` 一一对应，改名必须两边一起改 |
+| `ContentChainsHome` | 旧链迁移：配偶从业与回避、医疗资源打招呼 | 两条链都写 `risk`/`integrity`，是立案审查结局的现实来路之一 |
+| `DossierTemplate(s)` / `DossierTemplatesY2` | 模板结构＋两批模板数据（Y1 14 件 / Y2 20 件） | **总表顺序＝读档重建顺序**：新增模板只能往后追加 |
+| `ContentNpcTalk` | NPC 台词池（10 人×8 句）＋ `StateLine` 状态感知台词（20 条） | 选项随熟悉度/信任解锁；效果仍走 mood 白名单 |
 | `DossierGenerator` | 14 模板×变量，`SeedPool(36)` | id=`dz_g{seq}_{MMdd}` 唯一 |
 | `ContentRulebook` | 6 条口径 | issue.ruleKey |
 | `ContentNpcTalk` | 常委台词＋回退选项 | 无 AI 可玩 |
@@ -38,7 +46,8 @@
 | `Career.cs` | 七品→六品双尺考核 | 旧吏轨留桩 |
 | `Llm.cs` | 市长层提示词；周评=周谨 | 效果白名单 |
 | `Npcs.cs` | 常委会权力地形 | |
-| `ContentRegistry.cs` | 唯一注册入口 | 科员线暂不注册 |
+| `ContentRegistry.cs` | 唯一注册入口（启动时由 GameApp.Init / State.NewGame 调用） | 科员线暂不注册；RegisterAll 自愈可重入 |
+| `GameLog.cs` | Core 的日志出口（Ui 层接线到 Debug.Log） | 让 Tests 不依赖 UnityEngine，可进独立编译门禁 |
 
 ### Ui/
 
@@ -59,7 +68,9 @@
 
 - **周一** `AssignWeek`：showcase/deadline 优先，再抽池；budget 默认 5。
 - **核对**：当前页有雷必中；案头口径 → DeskHint；错页 → 提示第 N 页；查出可补授口径。
-- **两把尺**：漏雷照准扣合规（severity×4）；逾期扣效率；进考核与六品门槛。
+- **两把尺**：漏雷照准扣合规（severity×4）；逾期扣效率；**办得干净（无漏查且未逾期）时谨慎处置不再倒扣效率**；月末回补（本月无漏查合规 +1、案头清空无逾期效率 +1）——防长线死亡螺旋。快进时引擎会**先翻页核对再办结**，并按 `DossierEngine.BestOptionIndex`（尽责启发式）选处置。
+- **风险账本**（`st.riskLedger`）：不可见的历史存疑，灰区处置/逾期/漏查重大雷会记；**一个月没添新账只回落 1**。40 → 纪委谈话提醒（可主动交底降账）；**65 且程序违规 ≥2 → 立案审查结局**。
+- **考核不拿终身累计**：`EvaluateYear` 按**年度** `yearIntegrity`＋两把尺＋风险账本判档；不称职**分级**（首次降级留任，再犯免职），累计三次基本称职→降级调离。
 - **口径**：`Grant` 入档案+上案头；满 4 顶最旧；`Open` 从档案捞回。
 - **链 marks**：`pressed_report`/`honest_report`；`algo_auto`/`algo_pass`/`algo_veto`。
 - **快进**：静默办结卷宗；队列非空必停。
@@ -76,7 +87,7 @@
 ## 5. 验证门禁
 
 ```bash
-# ① 编译
+# ① 编译（**四程序集**：uGUI / Core / Ui / Editor / Tests——Tests 已进门禁）
 "C:\Program Files\Git\bin\bash.exe" E:/Starstate/tools/check-compile.sh
 
 # ② 同步（PowerShell）
@@ -85,7 +96,18 @@ robocopy E:\Starstate\game-src\Assets\Scripts E:\Starstate\game\Assets\Scripts /
 # ③ EditMode（结果 XML 先写出，进程常挂——读 XML；只杀 -batchmode 实例）
 # Unity: D:\pro\unity\Editor\Unity.exe -batchmode -nographics -projectPath E:/Starstate/game
 #   -runTests -testPlatform EditMode -testResults <xml> -logFile <log>
+# ④ 再跑下一轮前先确认上一轮实例已退出（否则报“工程已在另一实例中打开”）：
+#   Get-CimInstance Win32_Process -Filter "Name='Unity.exe'" | ? { $_.CommandLine -like '*-batchmode*' } | % { Stop-Process -Id $_.ProcessId -Force }
+
+# ⑤ 内容/平衡秒级探针（脱离 Unity 跑 Core）：改卷宗/链/数值后先跑这个
+#   输出：卷宗注册数（手写/模板）、来文形态、第一年空周数、十年长跑结局与两把尺
+"C:\Program Files\Git\bin\bash.exe" E:/Starstate/tools/core-probe.sh all
 ```
+
+当前基线：**check-compile ALL_OK（5 段）+ EditMode 95/95 全绿**（2026-09-12）。
+
+> Tests 为何单独一条编译链：NUnit 是 net35 档，与 netstandard 2.1 无法混引（CS0012/CS0518）。
+> 因此 `GameLog.cs` 给 Core 提供日志出口，让 Tests **不引用 UnityEngine**，从而能进独立门禁。
 
 Play 手测金路径：新局→序章三幕→周计划→第一周卷宗（摊开口径→翻页→核对→签批）→状态页两把尺/权力板→口径页签检索。
 
@@ -132,5 +154,5 @@ Play 手测金路径：新局→序章三幕→周计划→第一周卷宗（摊
 | 口径 | 6 条 · 案头 4 槽 |
 | 常委密谈 | 10 人 × 4 条 |
 | 剧情链 | 对上报告、算法审批（分叉） |
-| 测试 | 30 过 / 5 跳过 |
+| 测试 | 95 过 / 0 跳过 |
 | 存档 | saveVersion 5 |
