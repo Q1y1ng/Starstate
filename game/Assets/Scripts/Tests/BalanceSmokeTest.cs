@@ -10,6 +10,7 @@ namespace Starstate.Tests
         public void Ten_Year_Stats_Stay_Sane()
         {
             ContentRegistry.RegisterAll();
+            Flow.SeedRng(20260901);   // 固定随机源：未播种时平衡断言会随机失败
             var st = State.NewGame("平衡测试员");
             Flow.Begin(st);
 
@@ -57,7 +58,7 @@ namespace Starstate.Tests
                 + st.player.attrs.comm + st.player.attrs.political;
             Assert.Greater(attrSum, 10, "十年后能力总和应有明显成长");
 
-            UnityEngine.Debug.Log($"[BALANCE] 结局={st.phase} 职级={st.grade} 储蓄={st.player.savings} " +
+            GameLog.Info($"[BALANCE] 结局={st.phase} 职级={st.grade} 储蓄={st.player.savings} " +
                 $"能力和={attrSum} 压力={st.player.stress} 士气={st.player.morale} " +
                 $"高压日占比={(sampleDays == 0 ? 0 : highStressDays * 1f / sampleDays):P0} " +
                 $"任务={st.tasks.Count} 考核={st.evals.Count} 竞争者={st.rival.progress}");

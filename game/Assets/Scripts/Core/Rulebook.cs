@@ -37,6 +37,9 @@ namespace Starstate.Core
 
         public static bool IsRegistered(string id) => !string.IsNullOrEmpty(id) && byId.ContainsKey(id);
 
+        /// <summary>注册表是否已装入口径（用于内容自检时区分“没注册”与“还没装”）</summary>
+        public static bool AnyRegistered { get { return byId.Count > 0; } }
+
         public static RuleDef Get(string id)
         {
             if (string.IsNullOrEmpty(id)) return null;

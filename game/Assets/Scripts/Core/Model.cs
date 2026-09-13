@@ -201,6 +201,11 @@ namespace Starstate.Core
     {
         public string key = "2026-08";
         public List<TaskRecord> tasks = new List<TaskRecord>();
+        // —— 两把尺的月度回补依据（Phase 5：长线只跌不涨会让两条尺都归零）——
+        public int dossiersResolved;    // 本月办结卷宗数
+        public int missedIssues;        // 本月漏查雷数
+        public int overdueCount;        // 本月逾期件数
+        public int riskGain;            // 本月新增风险（用于“干净月份”自动回落）
     }
 
     [Serializable]
@@ -247,6 +252,7 @@ namespace Starstate.Core
 
         // —— 结局 ——
         public bool resigned, underInvestigation;
+        public string adverse = "";      // M3：不利结局（"免职"/"降级"；非空即进结局）
         public EndingData endingData;
 
         // —— 年度统计（次年1月年度考核用，考核后清零）——
@@ -255,6 +261,15 @@ namespace Starstate.Core
         // —— AI 增强（LlmGameplay）：当日已生成过 AI 小事件的日期，防止重复 ——
         public string lastAiMicro = "";
         public string lastLetterMonth = "";  // AI 家信：上次生成的年月 "yyyy-MM"
+
+        // —— M2：每日氛围（LLM 涓色，无 AI 时留空）与签批批示（没有 AI 时用确定性回退批语）——
+        public string ambience = "";          // 当日一句氛围（新闻/天气/机关气味）
+        public string lastAiAmbience = "";   // 已生成氛围的日期（每日最多一次）
+        public string remark = "";           // 最近一条批示（签批结果页展示）
+        public string remarkDossier = "";    // 该批示对应的卷宗 id
+        public bool remarkAi;                 // 批示是否来自 AI 涓色
+        public string remarkAiTried = "";     // 已尝试涓色的卷宗 id（失败不重试）
+        public string pendingDossierId = "";  // 当前待展示结果的卷宗 id
 
         // —— Phase 4：叙事引擎状态 ——
         public List<string> marks = new List<string>();              // 叙事标记（跨事件记忆，持久化）
@@ -268,12 +283,14 @@ namespace Starstate.Core
         // —— Phase 5：卷宗与两把尺 ——
         public int compliance = 100;                           // 合规分 0-100
         public int efficiency = 70;                            // 效率分 0-100
+        public int riskLedger;                                 // 风险账本 0-100（M3）：灰区处置/程序违规/漏查重大雷累积，组织对你的存疑程度
         public List<string> pendingDossierIds = new List<string>();   // 本周待办卷宗 id
         public List<string> openDossierIds = new List<string>();      // 仍打开（未办结）
         public ActiveDossier activeDossier;                    // 正在办理
         public List<DossierLogEntry> dossierLog = new List<DossierLogEntry>();
         public List<string> dossierFired = new List<string>(); // 已使用卷宗实例 id
         public int weekDossierBudget = 5;                      // 本周件数上限
+        public int dossierSeq;                                 // 模板卷宗序号（存档内单调递增；id 由它派生，读档后可原样重建）
         public List<string> knownRules = new List<string>();   // 已获口径（档案全集）
         public List<string> deskRules = new List<string>();    // 案头槽位（上限 4，新件顶掉最旧）
         public string openRule = "";                           // 案头摊开的口径（空=未摊开）
@@ -355,6 +372,9 @@ namespace Starstate.Core
         public int professional, admin, exec, comm, political;   // 五维增量
         public int energy, stress, morale;
         public int reputation, polCapital;
+        public int compliance, efficiency;   // 两把尺增量（Phase 5）：剧情链也能推动合规/效率，而不只是卷宗签批
+        public int risk;                     // 风险账本增量（正=加重存疑，负=主动消解）
+        public string adverse = "";          // 不利结局（"免职"/"降级"；非空则直接进结局）
         public int moneyDelta;
         public List<RelDelta> rel = new List<RelDelta>();
         public List<string> setFlags = new List<string>();
@@ -388,6 +408,8 @@ namespace Starstate.Core
         {
             return professional == 0 && admin == 0 && exec == 0 && comm == 0 && political == 0
                 && energy == 0 && stress == 0 && morale == 0 && reputation == 0 && polCapital == 0
+                && compliance == 0 && efficiency == 0 && risk == 0
+                && string.IsNullOrEmpty(adverse)
                 && moneyDelta == 0 && (rel == null || rel.Count == 0)
                 && (setFlags == null || setFlags.Count == 0)
                 && (setMarks == null || setMarks.Count == 0)
@@ -528,6 +550,7 @@ namespace Starstate.Core
         public string docNo = "";
         public string org = "";         // 来文单位
         public string deadline = "";    // ISO；空=本周内
+        public string releaseFrom = ""; // ISO：最早可投放日（季节档期门槛；空=随时可投）
         public List<DossierPage> pages = new List<DossierPage>();
         public List<DossierIssue> issues = new List<DossierIssue>();
         public List<DossierOption> options = new List<DossierOption>();

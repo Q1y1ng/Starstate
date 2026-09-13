@@ -11,19 +11,49 @@ namespace Starstate.Core
     {
         static readonly Dictionary<string, Dossier> byId = new Dictionary<string, Dossier>();
         static readonly List<string> poolIds = new List<string>();
+        static readonly List<string> order = new List<string>();   // 注册顺序（不依赖 Dictionary.Keys 枚举顺序）
         static readonly Random rng = new Random(20260901);
+
+        /// <summary>注册期自检发现的问题（pageRef 越界 / ruleKey 未注册 / 无页面 / 无选项）。内容门禁用。</summary>
+        public static readonly List<string> ValidationErrors = new List<string>();
 
         public static void ClearRuntime() { RuntimeInstances.Clear(); }
 
         /// <summary>仅测试/热重载：清空注册表。新局勿调用。</summary>
-        public static void Clear() { byId.Clear(); poolIds.Clear(); RuntimeInstances.Clear(); }
+        public static void Clear()
+        {
+            byId.Clear(); poolIds.Clear(); order.Clear(); RuntimeInstances.Clear(); ValidationErrors.Clear();
+        }
 
         public static bool IsRegistered(string id) => byId.ContainsKey(id);
+
+        /// <summary>注册表 id 快照（内容审计/测试用；副本，调用方改不了注册表）。</summary>
+        public static List<string> RegisteredIds() { return new List<string>(order); }
 
         public static void Register(Dossier d)
         {
             if (d == null || string.IsNullOrEmpty(d.id)) return;
             byId[d.id] = d;
+            if (!order.Contains(d.id)) order.Add(d.id);
+            Validate(d);
+        }
+
+        /// <summary>注册期自检：埋雷指向不存在的页 / 口径未登记 → 该雷永远查不出或提示对不上。</summary>
+        static void Validate(Dossier d)
+        {
+            int pages = d.pages != null ? d.pages.Count : 0;
+            if (pages == 0) ValidationErrors.Add(d.id + "：无页面");
+            if (d.options == null || d.options.Count == 0) ValidationErrors.Add(d.id + "：无处置选项");
+            if (d.issues == null) return;
+            foreach (var i in d.issues)
+            {
+                int p = 1;
+                int.TryParse(i.pageRef, out p);
+                if (p < 1 || p > pages)
+                    ValidationErrors.Add(d.id + "：issue " + i.id + " pageRef=" + i.pageRef + " 超出页数 " + pages);
+                if (!string.IsNullOrEmpty(i.ruleKey) && Rulebook.AnyRegistered && !Rulebook.IsRegistered(i.ruleKey))
+                    ValidationErrors.Add(d.id + "：issue " + i.id + " ruleKey 未注册 " + i.ruleKey);
+            }
         }
 
         /// <summary>入随机池（kind 非 showcase 的模板件）。</summary>
@@ -76,9 +106,11 @@ namespace Starstate.Core
             return d;
         }
 
-        /// <summary>周一：按本周预算装配待办卷宗（教学件优先，再抽池）。</summary>
+        /// <summary>周一：按本周预算装配待办卷宗（积压→教学/高光→随机池→按需生成补货）。</summary>
         public static void AssignWeek(GameState st, IEnumerable<string> forcedIds = null)
         {
+            int budget = Math.Max(3, st.weekDossierBudget);
+            var carry = new List<string>(st.pendingDossierIds);
             st.pendingDossierIds.Clear();
             if (forcedIds != null)
             {
@@ -89,25 +121,39 @@ namespace Starstate.Core
                 }
                 return;
             }
-            int budget = Math.Max(3, st.weekDossierBudget);
             var taken = new HashSet<string>(st.dossierFired);
 
-            // 1. 手写 showcase / deadline 优先补位（按注册序，未用过）
-            foreach (var id in byId.Keys)
+            // 0. 上周未办结的件先压在案头（积压也是一把尺）
+            foreach (var id in carry)
             {
                 if (st.pendingDossierIds.Count >= budget) break;
-                var d = byId[id];
-                if (d.kind != "showcase" && d.kind != "deadline") continue;
-                if (taken.Contains(id)) continue;
-                if (d.kind == "deadline" && d.deadline != null && string.Compare(d.deadline, st.date) < 0) continue;
+                if (taken.Contains(id) || st.pendingDossierIds.Contains(id)) continue;
                 st.pendingDossierIds.Add(id);
             }
 
-            // 2. 随机池补满
+            // 1. 手写 showcase / deadline 优先补位（按注册序，未用过，且已到投放档期）
+            foreach (var id in order)
+            {
+                if (st.pendingDossierIds.Count >= budget) break;
+                Dossier d;
+                if (!byId.TryGetValue(id, out d)) continue;
+                if (d.kind != "showcase" && d.kind != "deadline") continue;
+                if (taken.Contains(id)) continue;
+                // 季节档期：未到 releaseFrom 不投放（否则防汛/巡视类件会在九月被提前消费）
+                if (!string.IsNullOrEmpty(d.releaseFrom) && string.Compare(d.releaseFrom, st.date) > 0) continue;
+                if (d.kind == "deadline" && !string.IsNullOrEmpty(d.deadline) && string.Compare(d.deadline, st.date) < 0) continue;
+                st.pendingDossierIds.Add(id);
+            }
+
+            // 2. 随机池补满（季节档期同样要卡：手写件是 RegisterPool 进来的，会从这里绕回案头）
             var candidates = new List<string>();
             foreach (var id in poolIds)
             {
                 if (taken.Contains(id) || st.pendingDossierIds.Contains(id)) continue;
+                Dossier pd;
+                if (byId.TryGetValue(id, out pd)
+                    && !string.IsNullOrEmpty(pd.releaseFrom) && string.Compare(pd.releaseFrom, st.date) > 0)
+                    continue;   // 未到投放档期
                 candidates.Add(id);
             }
             // 加权洗牌（weight 暂按 1）
@@ -121,6 +167,16 @@ namespace Starstate.Core
                 if (st.pendingDossierIds.Count >= budget) break;
                 st.pendingDossierIds.Add(id);
             }
+
+            // 3. 仍不够 → 按需生成模板件（十年长线不能依赖启动时那 36 件的播种）
+            //    不预先登记：id 由存档内序号派生且生成过程纯确定，需要时用 Respawn 原样重建。
+            while (st.pendingDossierIds.Count < budget)
+            {
+                st.dossierSeq++;
+                string genId = DossierGenerator.SpawnOne(GameClock.Parse(st.date), st.dossierSeq).id;
+                if (taken.Contains(genId) || st.pendingDossierIds.Contains(genId)) continue;
+                st.pendingDossierIds.Add(genId);
+            }
         }
 
         /// <summary>打开下一件待办；无则 false。</summary>
@@ -130,7 +186,7 @@ namespace Starstate.Core
             if (st.pendingDossierIds.Count == 0) return false;
             string id = st.pendingDossierIds[0];
             st.pendingDossierIds.RemoveAt(0);
-            var proto = Clone(id);
+            var proto = ResolveDefinition(st, id, true);   // 注册/重建：读档后不再出现“取不到定义”
             if (proto == null) return false;
             // 运行时实例挂 runtime 侧：用 openDossierIds + 全局注册表克隆缓存
             RuntimeInstances[id] = proto;
@@ -146,11 +202,22 @@ namespace Starstate.Core
 
         static readonly Dictionary<string, Dossier> RuntimeInstances = new Dictionary<string, Dossier>();
 
+        /// <summary>取卷宗定义：注册表克隆 → 按 id 原样重建（模板件 id 可由存档内序号反解）。</summary>
+        static Dossier ResolveDefinition(GameState st, string id, bool register)
+        {
+            var d = Clone(id);
+            if (d != null) return d;
+            var gen = DossierGenerator.Respawn(id, GameClock.Parse(st.date));
+            if (gen != null && register) Register(gen);
+            return gen;
+        }
+
         public static Dossier Current(GameState st)
         {
             if (st?.activeDossier == null) return null;
-            if (RuntimeInstances.TryGetValue(st.activeDossier.id, out var d)) return d;
-            return Clone(st.activeDossier.id);
+            Dossier d;
+            if (RuntimeInstances.TryGetValue(st.activeDossier.id, out d)) return d;
+            return ResolveDefinition(st, st.activeDossier.id, false);
         }
 
         public static void TurnPage(GameState st, int delta)
@@ -183,6 +250,41 @@ namespace Starstate.Core
             return null;
         }
 
+        /// <summary>
+        /// “尽责市长”启发式：供**快进静默办结**与**平衡探针**使用。
+        ///
+        /// 绝不能只看 complianceDelta：本项目里灰区处置常常“面子上合规分更高”
+        /// （“压一压”“内部消化”“以整改为主”），却会写程序违规记录。
+        /// 旧实现只看合规分，于是自动推进十年必然把违规记录攒到满（探针实测：18 个月 10 次）。
+        /// </summary>
+        public static int BestOptionIndex(GameState st, Dossier d)
+        {
+            if (d == null || d.options == null || d.options.Count == 0) return 0;
+            int best = 0, bestScore = int.MinValue;
+            for (int i = 0; i < d.options.Count; i++)
+            {
+                string reason;
+                if (!OptionAvailable(st, d.options[i], out reason)) continue;
+                var o = d.options[i];
+                int score = o.complianceDelta + o.efficiencyDelta / 2;
+                if (o.gray) score -= 60;
+                if (o.effects != null && o.effects.integrity != null) score -= 120;
+                if (o.effects != null && o.effects.setMarks != null)
+                    foreach (var m in o.effects.setMarks)
+                        if (RiskMarks.Contains(m)) score -= 20;
+                if (score > bestScore) { bestScore = score; best = i; }
+            }
+            return best;
+        }
+
+        /// <summary>会挂上后续代价的灰区标记（快进启发式里额外扣分，让自动推进不会主动积账）。</summary>
+        static readonly HashSet<string> RiskMarks = new HashSet<string>
+        {
+            "stat_fudge", "yq_delete", "safety_loose", "budget_split", "procure_hold",
+            "petition_paper", "yibao_soft", "land_directed", "avoid_soft", "xun_paper_close",
+            "province_report_loose", "province_dd_selfcheck", "home_vague", "med_favor",
+        };
+
         public static bool OptionAvailable(GameState st, DossierOption o, out string lockReason)
         {
             lockReason = "";
@@ -200,7 +302,7 @@ namespace Starstate.Core
             return true;
         }
 
-        /// <summary>签批结算：未查出的雷按严重度扣两把尺；写档案与日志；关卷。</summary>
+        /// <summary>卷宗签批结算：未查出的雷按严重度扣两把尺；写档案与日志；关卷。</summary>
         public static DossierLogEntry Resolve(GameState st, int optionIndex)
         {
             var act = st?.activeDossier;
@@ -224,10 +326,25 @@ namespace Starstate.Core
             int eDelta = opt.efficiencyDelta;
             bool overdue = !string.IsNullOrEmpty(d.deadline) && string.Compare(st.date, d.deadline) > 0;
             if (overdue) eDelta -= 8;
+            // 按时办结且无漏查 → 效率不再倒扣（办得干净本身就是效率），但也不会凭空增长：
+            // 效率的正增长只能来自“敢拍板”的处置（照准/特事特办），这就是两把尺的张力所在。
+            if (missed == 0 && !overdue && eDelta < 0) eDelta = 0;
+
+            // —— 风险账本（M3）：合规分是“当下评价”，风险账本是“历史存疑”，两者走向可以相反 ——
+            // 制度不会因为你签得快而不记账；灰区处置、漏查重大雷、逾期都在账上。
+            int risk = 0;
+            if (opt.gray) risk += 2;
+            if (overdue) risk += 1;
+            foreach (var issue in d.issues)
+                if (!act.foundIssues.Contains(issue.id) && issue.severity >= 3) risk += 2 + issue.severity;
+            if (risk > 0) Flow.AddRisk(st, risk, "卷宗：" + d.title);
 
             st.compliance = Math.Max(0, Math.Min(100, st.compliance + cDelta));
             st.efficiency = Math.Max(0, Math.Min(100, st.efficiency + eDelta));
             if (missed > 0) st.yearIntegrity += 1;
+            st.month.dossiersResolved++;
+            st.month.missedIssues += missed;
+            if (overdue) st.month.overdueCount++;
             st.yearGradePoints += (cDelta >= 0 ? 2 : -2) + (eDelta >= 0 ? 1 : -1);
             st.yearTaskCount++;
 
@@ -252,7 +369,7 @@ namespace Starstate.Core
             RuntimeInstances.Remove(d.id);
 
             act.resolved = true;
-            act.pendingResultTitle = string.IsNullOrEmpty(opt.result) ? d.title : d.title;
+            act.pendingResultTitle = d.title;
             act.pendingResultParas = new List<string>();
             if (!string.IsNullOrEmpty(opt.result)) act.pendingResultParas.Add(opt.result);
             if (missed > 0)
@@ -261,6 +378,13 @@ namespace Starstate.Core
                 act.pendingResultParas.Add("（该查的你都查了。批语落在纸上，轻，却压得住人。）");
 
             st.AddLog("卷宗", $"{opt.label}：{d.title}" + (missed > 0 ? $"（漏查 {missed}）" : ""));
+
+            // 批示：先落一条确定性批语（无 AI 时就是它），有 AI 时 UI 会在后台请模型涓色后覆盖。
+            // 放在 Core 里而不是 UI：无 AI 的机器上也要有“签批”的味道。
+            st.pendingDossierId = d.id;
+            st.remarkDossier = d.id;
+            st.remark = LlmGameplay.FallbackRemark(opt.label, missed);
+            st.remarkAi = false;
             return entry;
         }
 

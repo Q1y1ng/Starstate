@@ -26,6 +26,7 @@ namespace Starstate.Ui
         private Text topText;
         private CanvasGroup topCg;
         private Text aiBadge;
+        private Text ambienceText;   // M2：当日氛围句（LLM 涓色；无 AI 时不显示）
         private Button ffButton;
         private string lastTopText;
 
@@ -287,6 +288,12 @@ namespace Starstate.Ui
             brt.anchoredPosition = new Vector2(-226, 0);
             brt.sizeDelta = new Vector2(120, 20);
             aiBadge.text = "";
+
+            // 当日氛围句（M2）：顶栏底边那条细字，有 AI 时才生内容
+            ambienceText = NewText(bg.transform, "Ambience", 11, InkSoft, TextAnchor.MiddleLeft);
+            Stretch(ambienceText.rectTransform, new Vector2(0, 0), new Vector2(1, 0),
+                new Vector2(98, -20), new Vector2(-226, -6));
+            ambienceText.text = "";
 
             var ff = MakeButton(bg.transform, "▸▸ 推进", 15, true);
             ffButton = ff;
@@ -1385,7 +1392,7 @@ namespace Starstate.Ui
             llmEndpoint = MakeSettingsInput(cAdv, "服务地址（OpenAI 兼容 …/v1/chat/completions）",
                 v => { if (llmCfg != null) llmCfg.endpoint = v; LlmChanged(); });
             llmKey = MakeSettingsInput(cAdv, "API 密钥（本地服务可留空）",
-                v => { if (llmCfg != null) llmCfg.apiKey = v; LlmChanged(); });
+                v => { if (llmCfg != null) llmCfg.apiKey = v; LlmChanged(); }, true);
             llmModel = MakeSettingsInput(cAdv, "模型名（本地服务可留空）",
                 v => { if (llmCfg != null) llmCfg.model = v; LlmChanged(); });
             llmServer = MakeSettingsInput(cAdv, "llama-server.exe 路径",
@@ -1456,7 +1463,7 @@ namespace Starstate.Ui
             return sec.transform;
         }
 
-        private InputField MakeSettingsInput(Transform parent, string placeholder, Action<string> onCommit)
+        private InputField MakeSettingsInput(Transform parent, string placeholder, Action<string> onCommit, bool secret = false)
         {
             var go = NewGo("In_" + placeholder.GetHashCode(), parent);
             go.AddComponent<LayoutElement>().preferredHeight = 34;
@@ -1466,6 +1473,7 @@ namespace Starstate.Ui
             img.color = FromHex("#FFFFFF");
             var field = go.AddComponent<InputField>();
             field.characterLimit = 140;
+            if (secret) field.contentType = InputField.ContentType.Password;   // 密钥不明文回显
 
             var txtGo = NewGo("Text", go.transform);
             Stretch(txtGo.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
@@ -1606,19 +1614,41 @@ namespace Starstate.Ui
             lastTopText = s;
             topText.text = s;   // 日期变化直接更新，避免每次交互顶栏闪烁
             if (dayNumText != null && st != null)
+            {
                 dayNumText.text = GameClock.Parse(st.date).Day.ToString();
+                SetAmbience(st.ambience);   // 氛围句跟着存档走（读档后也在）
+            }
         }
 
         /// <summary>场景签名：kind+标题+段数+选项数+前两段+首选项（+文号/计划值）。同签名=同场景，跳过重建。</summary>
         private static string SceneSig(Scene s)
         {
-            var sb = new System.Text.StringBuilder(64);
-            sb.Append(s.kind).Append('¦').Append(s.title).Append('¦').Append(s.paras.Count)
-              .Append('¦').Append(s.options.Count);
-            for (int i = 0; i < s.paras.Count && i < 2; i++) sb.Append('¦').Append(s.paras[i]);
-            if (s.options.Count > 0) sb.Append('¦').Append(s.options[0]);
-            if (!string.IsNullOrEmpty(s.docNo)) sb.Append("¦D").Append(s.docNo);
+            // 内容**全部**参与散列：旧实现只取前 2 段，导致“只改第 3 段”的场景
+            // （典型：换一册案头口径后正文里的 DeskHint 行）被误判为同一场景而跳过重绘。
+            var sb = new System.Text.StringBuilder(96);
+            sb.Append(s.kind).Append('|').Append(s.title).Append('|').Append(s.docNo ?? "");
+            sb.Append('|').Append(Fold(s.paras)).Append('|').Append(Fold(s.options)).Append('|').Append(Fold(s.optionLocks));
+            if (s.planValues != null)
+                for (int i = 0; i < s.planValues.Length; i++) sb.Append('|').Append(s.planValues[i]);
             return sb.ToString();
+        }
+
+        /// <summary>把字符串列表折成一个稳定散列（内容全参与，长度有界）。</summary>
+        private static int Fold(System.Collections.Generic.List<string> list)
+        {
+            unchecked
+            {
+                int h = 17;
+                if (list == null) return h;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    string t = list[i];
+                    h = h * 31 + (t == null ? 0 : t.Length);
+                    if (t == null) continue;
+                    for (int j = 0; j < t.Length; j++) h = h * 131 + t[j];
+                }
+                return h;
+            }
         }
 
         public void RenderMain(Scene scene)
@@ -2286,6 +2316,15 @@ namespace Starstate.Ui
         }
 
         public void SetAiBadge(string s) { if (aiBadge != null) aiBadge.text = s; }
+
+        /// <summary>当日氛围句（M2）：空字符串 = 隐藏该行。</summary>
+        public void SetAmbience(string s)
+        {
+            if (ambienceText == null) return;
+            string t = s ?? "";
+            if (ambienceText.text == t) return;
+            ambienceText.text = t;
+        }
 
         /// <summary>推进按钮可用性：待抉择事件在屏时置灰，提示需要玩家亲自选择。</summary>
         public void SetFfEnabled(bool enabled)

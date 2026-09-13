@@ -566,7 +566,6 @@ namespace Starstate.Core
                 docNo = "同财〔2026〕92号",
                 org = "市财政局",
                 checkBudget = 2,
-                generated = true,
                 pages = new List<DossierPage>
                 {
                     new DossierPage
@@ -611,7 +610,6 @@ namespace Starstate.Core
                 docNo = "同应急〔2026〕61号",
                 org = "市应急管理局",
                 checkBudget = 2,
-                generated = true,
                 pages = new List<DossierPage>
                 {
                     new DossierPage
@@ -666,7 +664,6 @@ namespace Starstate.Core
                 docNo = "同组〔2026〕23号",
                 org = "市委组织部",
                 checkBudget = 3,
-                generated = true,
                 pages = new List<DossierPage>
                 {
                     new DossierPage

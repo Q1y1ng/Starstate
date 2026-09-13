@@ -121,6 +121,7 @@ namespace Starstate.Core
         {
             var sb = new StringBuilder();
             var d = GameClock.Parse(st.date);
+            string weekStart = GameClock.Iso(GameClock.MondayOf(d));   // 本周一：引用素材必须落在本周
             sb.Append($"【本周】{d.Year}年第{st.week.index}周；玩家：{st.player.name}，{st.grade}，大同市市长。【纯文本】\n");
             sb.Append($"【周计划】签批{st.plan.work} 调研{st.plan.study} 会商{st.plan.social} 关系{st.plan.family} 休整{st.plan.rest}（精力分配）。\n");
             int pending = st.pendingDossierIds.Count + (st.activeDossier != null && !st.activeDossier.resolved ? 1 : 0);
@@ -131,6 +132,7 @@ namespace Starstate.Core
                 for (int i = st.dossierLog.Count - 1; i >= 0 && n < 3; i--)
                 {
                     var e = st.dossierLog[i];
+                    if (string.CompareOrdinal(e.date ?? "", weekStart) < 0) break;   // 只引本周，不拿上上周的件充数
                     sb.Append($"【本周卷宗】{e.date} {e.disposition}：{e.title}（漏查{e.issuesMissed}）\n");
                     n++;
                 }
@@ -140,6 +142,7 @@ namespace Starstate.Core
             {
                 var l = st.log[i];
                 if (l.kind == "系统" || string.IsNullOrEmpty(l.text)) continue;
+                if (string.CompareOrdinal(l.date ?? "", weekStart) < 0) break;       // 同上：只引本周
                 sb.Append($"【本周事件】{l.date} {l.text}\n");
                 taken++;
             }
@@ -171,6 +174,33 @@ namespace Starstate.Core
             return sb.ToString();
         }
 
+        /// <summary>M2 每日氛围：办公桌外的世界一句话（纯文本，≤ 40 字）。</summary>
+        public static string AmbienceUser(GameState st)
+        {
+            var d = GameClock.Parse(st.date);
+            string social = ContentRegistry.Years.ContainsKey(d.Year) ? ContentRegistry.Years[d.Year].social : "";
+            var sb = new StringBuilder();
+            sb.Append($"【日期】{GameClock.FmtFull(d)}；地点：大同市人民政府办公楼；玩家：{st.player.name}，大同市市长。【纯文本】\n");
+            if (!string.IsNullOrEmpty(social)) sb.Append($"【当月城市背景】{social}\n");
+            sb.Append($"【当前】合规{st.compliance}，效率{st.efficiency}，案头待办{st.pendingDossierIds.Count}件，精力{st.player.energy}，压力{st.player.stress}。\n");
+            sb.Append("【任务】写**一句话**（不超过 40 字）作为当日的氛围：窗外的天、机关的走廊味、楼道里的脚步声、食堂的菜、一则简短的本地讯息皆可。");
+            sb.Append("要克制、具体、有画面感；不要人物对话，不要提问，不要提及任何数值，不要标题。只输出这一句话本身。");
+            return sb.ToString();
+        }
+
+        /// <summary>M2 批示涓色：把市长刚做的处置涓成一句公文批语（纯文本，≤ 30 字）。</summary>
+        public static string RemarkUser(GameState st, string dossierTitle, string optionLabel, string resultText)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"【场景】{st.date}，{st.player.name}（{st.grade}，大同市人民政府市长）在办公桌上签批一份来文。【纯文本】\n");
+            sb.Append($"【来文】{dossierTitle}\n");
+            sb.Append($"【处置】{optionLabel}\n");
+            if (!string.IsNullOrEmpty(resultText)) sb.Append($"【后续】{resultText}\n");
+            sb.Append("【任务】写一句他写在卷宗上的批语（不超过 30 字）：公文口吻，文言白话相间，克制；");
+            sb.Append("不要“批示：”前缀，不要引号，不要解释，不要提及任何数值或点数。只输出这一句批语。");
+            return sb.ToString();
+        }
+
         private static string PhaseLabel(Phase p)
         {
             switch (p)
@@ -188,22 +218,25 @@ namespace Starstate.Core
 
     // ---------------- 解析（容错；Core 纯 C#，自带迷你 JSON 解析器） ----------------
 
-    /// <summary>极简 JSON 解析：对象→Dictionary，数组→List，标量→string/double/bool/null。</summary>
-    internal static class MiniJson
+    /// <summary>
+    /// 极简 JSON 解析：对象→Dictionary，数组→List，标量→string/double/bool/null。
+    /// **实例式**（不走静态 pos）——若将来把解析放到后台线程，或两处解析交错，也不会互相踩游标。
+    /// </summary>
+    internal sealed class MiniJson
     {
-        private static int pos;
+        private int pos;
 
         public static object Parse(string json)
         {
-            pos = 0;
-            var v = Value(json);
-            Ws(json);
+            var p = new MiniJson();
+            var v = p.Value(json);
+            p.Ws(json);
             return v;
         }
 
-        private static void Ws(string s) { while (pos < s.Length && char.IsWhiteSpace(s[pos])) pos++; }
+        private void Ws(string s) { while (pos < s.Length && char.IsWhiteSpace(s[pos])) pos++; }
 
-        private static object Value(string s)
+        private object Value(string s)
         {
             Ws(s);
             if (pos >= s.Length) throw new FormatException("json eof");
@@ -217,14 +250,14 @@ namespace Starstate.Core
             return Num(s);
         }
 
-        private static bool Match(string s, string lit)
+        private bool Match(string s, string lit)
         {
             if (pos + lit.Length > s.Length || s.Substring(pos, lit.Length) != lit) return false;
             pos += lit.Length;
             return true;
         }
 
-        private static object Obj(string s)
+        private object Obj(string s)
         {
             pos++; // {
             var d = new Dictionary<string, object>();
@@ -246,7 +279,7 @@ namespace Starstate.Core
             }
         }
 
-        private static object Arr(string s)
+        private object Arr(string s)
         {
             pos++; // [
             var l = new List<object>();
@@ -262,7 +295,7 @@ namespace Starstate.Core
             }
         }
 
-        private static string Str(string s)
+        private string Str(string s)
         {
             pos++; // "
             var sb = new StringBuilder();
@@ -300,7 +333,7 @@ namespace Starstate.Core
             throw new FormatException("string not closed");
         }
 
-        private static object Num(string s)
+        private object Num(string s)
         {
             int start = pos;
             while (pos < s.Length && "-+.eE0123456789".IndexOf(s[pos]) >= 0) pos++;
@@ -546,5 +579,58 @@ namespace Starstate.Core
 
         private static string Sig(int v) { return v >= 0 ? "+" + v : v.ToString(); }
         private static int Clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
+
+        // ---------------- M2：批示与每日氛围（纯文本，严格回退） ----------------
+
+        /// <summary>
+        /// 确定性批语（无 AI 时的回退）：按处置类型给一句公文味道的批语。
+        /// 注意：这里**不暴露任何数值**（不写“合规+3”），只写签批的人会写的话。
+        /// </summary>
+        public static string FallbackRemark(string label, int missed)
+        {
+            string t = label ?? "";
+            string s;
+            if (t.Contains("退回") || t.Contains("补正") || t.Contains("补")) s = "退回来文单位，补齐依据后再报。";
+            else if (t.Contains("重新") || t.Contains("比价") || t.Contains("核")) s = "请复算后重新报批。";
+            else if (t.Contains("请") || t.Contains("请示") || t.Contains("报省")) s = "此事权限不在市里，按程序报省。";
+            else if (t.Contains("暂缓") || t.Contains("压") || t.Contains("缓")) s = "先放一放，待方案成熟再议。";
+            else if (t.Contains("照准") || t.Contains("同意")) s = "同意，请按规定办理。";
+            else s = "按程序办理。";
+            if (missed > 0) s += "（签得快，未必看得全。）";
+            return s;
+        }
+
+        /// <summary>批语清洗：单行、去引号与代码块、限长；不合格返回 null（调用方保留回退批语）。</summary>
+        public static string SanitizeRemark(string raw, int maxLen = 40)
+        {
+            if (string.IsNullOrEmpty(raw)) return null;
+            string s = Clean(raw);
+            if (s.Length == 0) return null;
+            if (s.Length > maxLen) s = s.Substring(0, maxLen).TrimEnd('，', '。', '、', ' ') + "。";
+            return s;
+        }
+
+        /// <summary>氛围句清洗：单行、无引号、限长（不超过 60 字）。</summary>
+        public static string SanitizeAmbience(string raw, int maxLen = 60)
+        {
+            if (string.IsNullOrEmpty(raw)) return null;
+            string s = Clean(raw);
+            if (s.Length == 0) return null;
+            return s.Length > maxLen ? s.Substring(0, maxLen).TrimEnd('，', '。', '、', ' ') + "。" : s;
+        }
+
+        /// <summary>去代码块/引号/换行，压缩空白。</summary>
+        static string Clean(string raw)
+        {
+            string s = raw.Trim();
+            s = s.Replace("```json", "").Replace("```", "");
+            s = s.Replace("\r", "").Replace("\n", " ");
+            s = s.Replace('"', ' ');
+            while (s.Contains("  ")) s = s.Replace("  ", " ");
+            // 去掉模型爱加的标签前缀
+            while (s.StartsWith("批语：") || s.StartsWith("批语:") || s.StartsWith("批示：") || s.StartsWith("批示:"))
+                s = s.Substring(3).TrimStart('：', ':', ' ');
+            return s.Trim();
+        }
     }
 }

@@ -26,6 +26,8 @@ namespace Starstate.Ui
         private bool llmReady;          // 服务可用（本地已就绪 / 远程默认按可用处理）
         private bool llmChecking;
         private bool microBusy;
+        private bool ambienceBusy, remarkBusy;   // M2：氛围句/批示在途
+        private int ambienceSession;
 
         // —— NPC 交谈状态机 ——
         private string talkNpc;
@@ -63,6 +65,10 @@ namespace Starstate.Ui
 
         public void Init(UiRoot root)
         {
+            // 内容注册：必须早于任何 State.NewGame / Flow.Begin（旧版从未在运行时调用，
+            // 导致 Play/出货时序章、卷宗、年度考核、结局全是空的——测试因为各自调了 RegisterAll 而看不到）
+            ContentRegistry.RegisterAll();
+            GameLog.Sink = Debug.Log;   // Core 纯 C#，日志出口在 Ui 层接线
             ui = root;
             ui.OnOptionChosen += Choose;
             ui.OnPlanAdjusted += PlanAdjusted;
@@ -369,7 +375,11 @@ namespace Starstate.Ui
 
         private void ResetSave()
         {
-            try { if (File.Exists(SlotPath(activeSlot))) File.Delete(SlotPath(activeSlot)); } catch { /* ignore */ }
+            lock (SaveLock)
+            {
+                try { if (File.Exists(SlotPath(activeSlot))) File.Delete(SlotPath(activeSlot)); } catch { /* ignore */ }
+                SavedTicket.Remove(SlotPath(activeSlot));
+            }
             st = null;
             ui.SetSettingsHint("当前槽位存档已重置。点击“返回”回到主菜单。");
             RefreshMenuSaves();
@@ -425,7 +435,7 @@ namespace Starstate.Ui
             st = LoadFromPath(SlotPath(slot));
             if (st == null || st.saveVersion != SaveVersion)
             {
-                ui.SetMenuHint("检测到旧版本存档（格式已升级到 v4），无法继续——已为你开始新的一局。");
+                ui.SetMenuHint("检测到旧版本存档（格式已升级到 v5），无法继续——已为你开始新的一局。");
                 activeSlot = slot;
                 st = State.NewGame(ui.NameInput());
                 st.saveVersion = SaveVersion;
@@ -450,13 +460,12 @@ namespace Starstate.Ui
                 st.saveVersion = SaveVersion;
                 string json = JsonUtility.ToJson(st);
                 if (string.IsNullOrEmpty(json) || json.Length < 16) return;
-                string path = SlotPath(slot);
-                string tmp = path + ".tmp";
-                File.WriteAllText(tmp, json);
-                if (new FileInfo(tmp).Length >= 16)
+                long ticket = System.Threading.Interlocked.Increment(ref saveTicket);
+                lock (SaveLock)
                 {
-                    if (File.Exists(path)) File.Replace(tmp, path, null);
-                    else File.Move(tmp, path);
+                    // 快照走与自动存档同一把锁＋同一序号体系，避免两边并发写同一文件
+                    WriteOneAtomic(json, SlotPath(slot), ticket);
+                    WriteOneAtomic(json, AutoPath, ticket);
                 }
                 ui.SetSettingsHint("已快照到槽位 " + slot + "。");
             }
@@ -567,8 +576,7 @@ namespace Starstate.Ui
             }
             if (st.phase != Phase.Day) return; // 序章事件含关键抉择，不代选
             // 屏上是日常/岗位任务：选默认项（与快进内部行为一致，一步一停）
-            if (st.runtimeEvent != null &&
-                (st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task"))
+            if (st.runtimeEvent == null || Flow.IsGeneratedDaily(st.runtimeEvent))
             {
                 Flow.Choose(st, 0);
                 Save();
@@ -589,8 +597,94 @@ namespace Starstate.Ui
             ui.RenderMain(scene);
             RenderSide();
             MaybeMicro(scene);
+            MaybeAmbience(scene);
+            MaybeRemark();
             MaybeAiMail();
             UpdateFfButton();
+        }
+
+        // ---------------- M2：每日氛围句 + 批示涓色（失败静默，都有确定性回退） ----------------
+
+        /// <summary>每日氛围一句：普通工作日首次渲染时请求一次（当日不重试），无 AI 时该行不显示。</summary>
+        private void MaybeAmbience(Scene scene)
+        {
+            if (llm == null || !llm.enabled || !llmReady || ambienceBusy) return;
+            if (st == null || st.phase != Phase.Day || st.hasPending) return;
+            if (scene.kind != "day") return;
+            if (st.lastAiAmbience == st.date) return;
+            st.lastAiAmbience = st.date;   // 先占位：失败也不重试（防止每帧重试）
+            Save();
+            ambienceBusy = true;
+            ambienceSession++;
+            StartCoroutine(RequestAmbience(ambienceSession));
+        }
+
+        private IEnumerator RequestAmbience(int session)
+        {
+            string date = st != null ? st.date : "";
+            yield return ChatOnce(new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.AmbienceUser(st) },
+            }, 120,
+            content =>
+            {
+                ambienceBusy = false;
+                if (session != ambienceSession || st == null || st.date != date) return;   // 已过日/已重开，结果作废
+                string t = LlmGameplay.SanitizeAmbience(content);
+                if (string.IsNullOrEmpty(t)) return;
+                st.ambience = t;
+                Save();
+                ui.SetAmbience(t);
+            },
+            e => { ambienceBusy = false; });
+        }
+
+        /// <summary>
+        /// 批示涓色：签批结果页先把 Core 的确定性批语渲染出来（无 AI 也有），
+        /// 有 AI 时再异步请模型涓成一句公文批语；回来后写存档并重绘（场景签名变了会重建）。
+        /// </summary>
+        private void MaybeRemark()
+        {
+            if (llm == null || !llm.enabled || !llmReady || remarkBusy) return;
+            if (st == null || !st.hasPending) return;
+            if (string.IsNullOrEmpty(st.remarkDossier) || st.remarkDossier != st.pendingDossierId) return;
+            if (st.remarkAi) return;                                    // 已经涓过了
+            if (st.remarkAiTried == st.remarkDossier) return;           // 这件已经试过、失败不再重试
+            st.remarkAiTried = st.remarkDossier;
+            Save();
+            remarkBusy = true;
+            StartCoroutine(RequestRemark());
+        }
+
+        private IEnumerator RequestRemark()
+        {
+            string id = st.remarkDossier;
+            string fallback = st.remark;
+            var dl = st.dossierLog;
+            string title = st.pendingTitle;
+            string label = "";
+            for (int i = dl.Count - 1; i >= 0; i--)
+                if (dl[i].dossierId == id) { label = dl[i].disposition; break; }
+            string resultText = (st.pendingParas != null && st.pendingParas.Count > 0) ? st.pendingParas[0] : "";
+
+            yield return ChatOnce(new[]
+            {
+                new ChatMsg { role = "system", content = LlmPrompt.System() },
+                new ChatMsg { role = "user", content = LlmPrompt.RemarkUser(st, title, label, resultText) },
+            }, 96,
+            content =>
+            {
+                remarkBusy = false;
+                if (st == null || st.remarkDossier != id) return;
+                string t = LlmGameplay.SanitizeRemark(content);
+                if (string.IsNullOrEmpty(t) || t == fallback) return;   // 涓色无变化则保留回退
+                st.remark = t;
+                st.remarkAi = true;
+                Save();
+                RenderAll();
+            },
+            e => { remarkBusy = false; });
         }
 
         /// <summary>AI 家信：每月一次（周末/月结附近），失败静默；同时偶发同事微信进日志。</summary>
@@ -663,11 +757,10 @@ namespace Starstate.Ui
             int bestF = 3;   // 太生疏的不私聊
             foreach (var id in Npcs.Order)
             {
-                if (id == "ma") continue; // 领导不发闲聊微信
                 var r = Npcs.Get(st, id);
                 if (r.familiar > bestF) { bestF = r.familiar; best = id; }
             }
-            if (best == null && Npcs.Order.Length > 0) best = Npcs.Order[0];
+            if (best == null) best = "zhoujin";   // 兜底：办公厅主任（旧代码回落到 Order[0]=常委会主席，不合常理）
             return best;
         }
 
@@ -685,8 +778,7 @@ namespace Starstate.Ui
                     case Phase.MonthEnd:
                         break;
                     case Phase.Day:
-                        ok = string.IsNullOrEmpty(st.currentEvent) &&
-                             (st.runtimeEvent == null || st.runtimeEvent.id == "_generic_day" || st.runtimeEvent.id == "_gen_task");
+                        ok = string.IsNullOrEmpty(st.currentEvent) && !Flow.PendingChoiceEvent(st);
                         break;
                     default:
                         ok = false; // 序章抉择
@@ -727,6 +819,9 @@ namespace Starstate.Ui
         // ---------------- 存档（异步 + 原子替换；主线程序列化，后台线程落盘） ----------------
 
         private static readonly object SaveLock = new object();
+        private static long saveTicket;                                   // 入队序号（单调）
+        private static readonly System.Collections.Generic.Dictionary<string, long> SavedTicket =
+            new System.Collections.Generic.Dictionary<string, long>();    // 每个文件已落盘的最大序号
 
         private void Save()
         {
@@ -735,41 +830,51 @@ namespace Starstate.Ui
             string json = JsonUtility.ToJson(st);   // 紧凑格式：比 pretty 更快、文件更小
             if (string.IsNullOrEmpty(json) || json.Length < 16) return;
             int slot = activeSlot;
-            System.Threading.ThreadPool.QueueUserWorkItem(_ => WriteSaveAtomic(json, slot));
+            long ticket = System.Threading.Interlocked.Increment(ref saveTicket);
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => WriteSaveAtomic(json, slot, ticket));
         }
 
-        private static void WriteSaveAtomic(string json, int slot)
+        /// <summary>原子写盘。ticket 保证同一文件的写入单调：
+        /// 旧实现只有互斥锁，ThreadPool 的调度顺序不保证 FIFO，早入队的快照可能后落盘，把新进度盖回旧状态。</summary>
+        private static void WriteSaveAtomic(string json, int slot, long ticket)
         {
             if (string.IsNullOrEmpty(json) || json.Length < 16) return;
             lock (SaveLock)
             {
                 try
                 {
-                    WriteOneAtomic(json, SlotPath(slot));
+                    WriteOneAtomic(json, SlotPath(slot), ticket);
                     // 手动槽同步镜像一份到自动档，便于“继续”总能回到最新进度
-                    if (slot > 0) WriteOneAtomic(json, AutoPath);
+                    if (slot > 0) WriteOneAtomic(json, AutoPath, ticket);
                 }
                 catch (System.Exception e)
                 {
                     Debug.LogWarning("[STARSTATE] 存档失败：" + e.Message);
-                }
-            }
+                }            }
         }
 
-        private static void WriteOneAtomic(string json, string path)
+        private static void WriteOneAtomic(string json, string path, long ticket)
         {
+            long done;
+            if (SavedTicket.TryGetValue(path, out done) && ticket < done) return;   // 已有更新的快照落盘，丢弃旧票
             string tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
             if (new FileInfo(tmp).Length < 16) return;   // 落盘校验
             if (File.Exists(path)) File.Replace(tmp, path, null);
             else File.Move(tmp, path);
+            SavedTicket[path] = ticket;
         }
 
         /// <summary>退出/销毁时同步兜底：确保最后一次状态落盘。</summary>
         private void FlushSaveSync()
         {
             if (st == null) return;
-            try { st.saveVersion = SaveVersion; WriteSaveAtomic(JsonUtility.ToJson(st), activeSlot); }
+            try
+            {
+                st.saveVersion = SaveVersion;
+                long ticket = System.Threading.Interlocked.Increment(ref saveTicket);
+                WriteSaveAtomic(JsonUtility.ToJson(st), activeSlot, ticket);
+            }
             catch { /* 兜底失败不阻断退出 */ }
         }
 
@@ -814,12 +919,33 @@ namespace Starstate.Ui
         private static Font _uiFont, _docFont;
 
         /// <summary>OS 中文字体（微软雅黑→黑体→宋体→内置字体兜底）。静态缓存：字号切换重建 UI 时不重复创建/泄漏 Font。</summary>
+        /// <summary>OS 是否真的装了这个字体族。
+        /// Font.CreateDynamicFontFromOSFont 对未知字体名通常也会返回非 null 回退字体，
+        /// 不先查清单的话，候选链（雅黑→黑体→宋体）里后两者永远走不到。</summary>
+        private static bool OsHasFont(string name)
+        {
+            try
+            {
+                var all = Font.GetOSInstalledFontNames();
+                if (all == null || all.Length == 0) return true;   // 取不到清单时不阻断
+                for (int i = 0; i < all.Length; i++)
+                {
+                    string n = all[i];
+                    if (!string.IsNullOrEmpty(n) && n.IndexOf(name, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                }
+                return false;
+            }
+            catch { return true; }
+        }
+
         public static Font MakeFont()
         {
             if (_uiFont != null) return _uiFont;
             string[] candidates = { "Microsoft YaHei", "微软雅黑", "SimHei", "SimSun" };
             foreach (var name in candidates)
             {
+                if (!OsHasFont(name)) continue;
                 try
                 {
                     var f = Font.CreateDynamicFontFromOSFont(name, 17);
@@ -838,6 +964,7 @@ namespace Starstate.Ui
             string[] candidates = { "FangSong", "仿宋", "FangSong_GB2312", "仿宋_GB2312", "KaiTi", "楷体" };
             foreach (var name in candidates)
             {
+                if (!OsHasFont(name)) continue;
                 try
                 {
                     var f = Font.CreateDynamicFontFromOSFont(name, 17);

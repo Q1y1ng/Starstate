@@ -8,16 +8,32 @@ namespace Starstate.Core
     {
         private static bool _registered;
 
+        /// <summary>
+        /// 内容注册（**启动时由 GameApp.Init 调用**；各测试自行调用）。
+        /// ① 自愈：注册表被 Clear（测试/热重载/域重载关闭）后再次调用会重新灌入，
+        ///    避免“调过一次就再也不注册”的单次守卫陷阱；
+        /// ② 先装口径再装卷宗：卷宗注册期的 ruleKey 自检需要 Rulebook 已装。
+        /// </summary>
         public static void RegisterAll()
         {
-            if (_registered) return;
+            bool intact = _registered
+                && Flow.IsRegistered("mp0")
+                && DossierEngine.IsRegistered("dz_t1")
+                && Rulebook.IsRegistered("rule_shuzi");
+            if (intact) return;
             _registered = true;
+            ContentRulebook.Register();       // Phase 5：口径手册条目（先装）
             ContentPrologueMayor.Register();  // Phase 5：七品市长序章三幕
             ContentDossierM0.Register();      // Phase 5：教学/高光/池卷宗
             ContentDossierY1.Register();      // Phase 5：第一年季节手写池
-            ContentCareerMayor.Register();    // Phase 5：年度考核＋十年结局
-            ContentRulebook.Register();       // Phase 5：口径手册条目
+            ContentDossierRoutes.Register();  // Phase 5 · M1：路线专属卷宗 4 件
+            ContentDossierY2.Register();      // Phase 5 · M1：手写卷宗第二辑 10 件（含风险/对赌链入口件）
+            ContentCareerMayor.Register();    // Phase 5：年度考核＋十年结局＋六品晋升窗口
+            ContentRoutesMayor.Register();    // Phase 5 · M1：剧情线路（路线确立＋四线＋权力/竞争/邀约链）
             ContentChainsMayor.Register();    // Phase 5：对上报告/算法审批链
+            ContentChainsRisk.Register();     // Phase 5 · M1：安全事故瞒报压力链＋招商引资对赌链
+            ContentTemplateChains.Register(); // Phase 5 · M2：模板件标记的后续代价（统计倒查/舆情反弹/事故再发/审计抽查…）
+            ContentChainsHome.Register();     // Phase 5 · M2：旧链迁移（配偶从业与回避、医疗资源打招呼）
             ContentClocksMayor.Register();    // Phase 5：考核冲刺/巡视时钟
             DossierGenerator.SeedPool(36, new DateTime(2026, 9, 1)); // 模板池，防第一年枯竭
             // 旧科员线内容暂不注册（M1 迁移或废弃）

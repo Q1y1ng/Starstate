@@ -53,5 +53,19 @@ echo "== [4/5] Starstate.Editor =="
 "$DOTNET" exec "$CSC" @"$OUT/editor.rsp"
 
 echo "== [5/5] Starstate.Tests =="
-echo "   （Tests 程序集由 Unity batchmode 编译并运行，独立链不重复——mscorlib/netstandard 双档案无法混引）"
+# Tests 走 mscorlib 独立链：NUnit 是 net35 档，与 netstandard 2.1 无法混引（会报 CS0012/CS0518）。
+# Core 本就不依赖 UnityEngine，所以再用 4.7.1-api 编一份等价 Core 供测试引用。
+API="D:/pro/unity/Editor/Data/MonoBleedingEdge/lib/mono/4.7.1-api"
+BCL4="-r:$API/mscorlib.dll -r:$API/System.dll -r:$API/System.Core.dll"
+{
+  echo "$COMMON -out:$OUT/Starstate.Core.ForTests.dll $BCL4"
+  ls "$SRC"/Core/*.cs
+} > "$OUT/core4.rsp"
+"$DOTNET" exec "$CSC" @"$OUT/core4.rsp"
+{
+  echo "$COMMON -out:$OUT/Starstate.Tests.dll $BCL4 -r:$OUT/Starstate.Core.ForTests.dll -r:$NUNIT"
+  ls "$SRC"/Tests/*.cs
+} > "$OUT/tests.rsp"
+"$DOTNET" exec "$CSC" @"$OUT/tests.rsp"
+
 echo "ALL_OK"

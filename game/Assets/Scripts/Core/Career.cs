@@ -69,11 +69,16 @@ namespace Starstate.Core
             return true;
         }
 
-        /// <summary>年度考核：合规/效率双尺＋关系＋程序问题。</summary>
+        /// <summary>年度考核：合规/效率双尺＋关系＋程序问题＋风险账本。
+        /// 注意：违规要**按年度**计（yearIntegrity），不能用终身累计（violationCount）——
+        /// 否则第一年四次小失误就终身背“不称职”，十年长局直接在第一年结束（探针实测过）。</summary>
         public static string EvaluateYear(GameState st, bool compete, Random rng)
         {
-            if (st.yearIntegrity >= 2) return "基本称职";
-            if (st.compliance < 40) return "基本称职";
+            // 阈值标定（十年长跑实测）：卷宗量 ≈5 件/周，即使尽责玩家也会漏掉个别雷，
+            // 所以“年度程序问题”按**次数**卡时要放宽；主要判据仍是两把尺与风险账本。
+            int bad = st.yearIntegrity;
+            if (bad >= 6 || st.riskLedger >= 85 || (bad >= 3 && st.compliance < 50)) return "不称职";
+            if (bad >= 3 || st.compliance < 40 || st.riskLedger >= 60) return "基本称职";
             int score = st.yearGradePoints
                       + (st.compliance - 70) / 2
                       + (st.efficiency - 60) / 3
@@ -99,6 +104,20 @@ namespace Starstate.Core
                 e.paras.Add($"2036年秋，{p.name}被宣布接受审查调查。办公室的门从里面锁上，再打开时，桌上只剩一盆没人浇水的文竹。");
                 e.paras.Add("卷宗柜里那些“当时觉得没什么”的批示，一页页被翻出来对时。制度的债，从来不会因为你签得快就消失。");
                 e.paras.Add($"{family}。只是这一次，灯下等的人等来的不是归期。");
+            }
+            else if (st.adverse == "免职")
+            {
+                e.title = "结局 · 免职待查";
+                e.paras.Add($"年度考核等第公布那天，{p.name}的档案袋上多了一张纸：不称职。一个月后，免职通知到了市政府。");
+                e.paras.Add("没有立案，也没有追究——组织给了体面，让你“待安排”。你收拾办公桌时才发现，抽屉里最厚的是两年没看的文件。");
+                e.paras.Add($"{family}。往后的日子，你终于有空读懂那些被自己签“照准”的句子。");
+            }
+            else if (st.adverse == "降级")
+            {
+                e.title = "结局 · 降级调离";
+                e.paras.Add($"三次基本称职之后，{p.name}被调任省里一个清闲署的副职——职级降了半格，份量也降了半格。");
+                e.paras.Add("十年大同，账面上没有大事，流程上没有硬伤。可“没有硬伤”不是政绩，只是没什么可写的。");
+                e.paras.Add($"{family}。你说这半格降得不冤，只是这话只有在你自己的桌子前说得出口。");
             }
             else if (st.resigned)
             {
@@ -156,6 +175,18 @@ namespace Starstate.Core
             Line("algo_pass", "你签过“算法辅助、人工终审”。后来《AI治理法》专条落地，你的那一页批示被当作正面案例——或反面，取决于谁在念。");
             Line("helped_petition", "你接过一次群众的门。十年后还有人记得市长办公室的灯。");
             Line("gray_favor", "你特事特办过一次。就一次。档案却不会写“就一次”。");
+            // —— Phase 5 · M1 剧情线路回响 ——
+            Line("route_industry", "这十年你押在产业上。牌子挂上了，配套率爬上去了，煤城的骨头换了一半——另一半，留给了下一任。");
+            Line("route_people", "这十年你押在民生上。暖气热了，老楼改了，接诉即办的数字先掉后涨。这些事不进大材料，但进老百姓的冬天。");
+            Line("route_project", "这十年你押在项目上。工地从玉米地长成了厂房，你的名字出现在每一份开工报告的落款处。");
+            Line("route_uplink", "这十年你押在向上争取上。省里的门你敲热了，专项债的额度翻了一倍——风口过去后，那些门也许会重新变冷。");
+            Line("ind_zone_won", "“承接产业转移示范区”那块牌子在墙上挂了八年。责任状锁在抽屉里，钥匙你一直带着走。");
+            Line("ppl_jiesu", "您建起的“接诉即办”，后任者保留了它——只是把满意率那一栏，改成了“力争”。");
+            Line("prj_village_mayor", "云冈区那个村的老大爷，在你的告别会上托人送了一袋小米。他说的“我记账”，记的是你来过。");
+            Line("pb_3_dirty_own", "纪委那个牛皮纸袋里的三份件，你在十年里又想起过很多次。承认过的事，反而不会在半夜里敲门。");
+            Line("rival_grace", "许飞比你早两年进六品。你们后来在省里的会上又见过几面，彼此都客气——客气里，有那一年的体面。");
+            if (st.route == "industry" || st.route == "people" || st.route == "project" || st.route == "uplink")
+                e.paras.Add("组织鉴定里的那一句，写的是你做成了什么；而你知道，这十年真正改变你的，是你选了哪条路。");
             if (st.dossierLog.Count > 0)
             {
                 int missed = 0;
@@ -165,6 +196,8 @@ namespace Starstate.Core
                 else
                     e.paras.Add("十年里，你桌上的雷，多数被你自己拆掉了。这在七品里，已属难得。");
             }
+            if (st.riskLedger >= 40)
+                e.paras.Add($"纪委监委的卷宗里，关于你的那份存疑始终没有合上（风险账本 {st.riskLedger}）。它不写在鉴定上，但它在。");
         }
     }
 }

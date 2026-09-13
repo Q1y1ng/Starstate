@@ -81,7 +81,8 @@ namespace Starstate.Tests
                 var dto = ContentNpcTalk.FallbackTalk(st, id);
                 Assert.IsNotNull(dto);
                 Assert.GreaterOrEqual(dto.options.Length, 2, id);
-                Assert.LessOrEqual(dto.options.Length, 3, id);
+                // 选项随熟悉度/信任解锁：3 基础 + “说给他听”(信任≥25) + “把关材料”(熟悉≥50)
+                Assert.LessOrEqual(dto.options.Length, 5, id);
                 Assert.IsFalse(string.IsNullOrEmpty(dto.greeting), id);
             }
         }

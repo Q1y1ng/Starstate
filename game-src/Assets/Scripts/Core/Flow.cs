@@ -12,7 +12,10 @@ namespace Starstate.Core
         private static readonly List<GameEvent> All = new List<GameEvent>();
         private static readonly Dictionary<string, GameEvent> ById = new Dictionary<string, GameEvent>();
         private static readonly List<string> RandomPool = new List<string>();
-        private static readonly Random Rng = new Random();
+        private static Random Rng = new Random();
+
+        /// <summary>测试/工具：固定随机源（运行时保持随机）。未播种的 Random 会让十年冒烟类断言随机失败。</summary>
+        public static void SeedRng(int seed) { Rng = new Random(seed); }
 
         private static readonly int[] GradeEval = { 4, 3, 1, -1, -3 };      // S A B C D → 科长评价
         private static readonly int[] GradeMorale = { 3, 2, 0, -2, -4 };    // S A B C D → 士气
@@ -32,6 +35,17 @@ namespace Starstate.Core
 
         /// <summary>测试/工具：事件是否已注册。</summary>
         public static bool IsRegistered(string id) => !string.IsNullOrEmpty(id) && ById.ContainsKey(id);
+
+        /// <summary>测试辅助：按 id 取注册的事件定义（返回共享实例，勿就地修改）。</summary>
+        public static GameEvent FindById(string id) => !string.IsNullOrEmpty(id) && ById.ContainsKey(id) ? ById[id] : null;
+
+        /// <summary>测试辅助：构建事件的当前态（动态事件走 BuildDynamic，静态事件直接返回注册实例）。</summary>
+        public static GameEvent BuildForTest(string id, GameState st)
+        {
+            var def = FindById(id);
+            if (def == null) return null;
+            return def.dynamic ? BuildDynamic(id, st) : def;
+        }
 
         // ---------------- 生命周期 ----------------
 
@@ -210,10 +224,49 @@ namespace Starstate.Core
 
         // ---------------- 场景呈现 ----------------
 
+        /// <summary>引擎生成的日常伪事件 id（可被剧情/卷宗抢先，也可被 AI 小事件替换、可快进代选）。</summary>
+        static bool IsGeneratedDailyId(string id)
+        {
+            return id == "_generic_day" || id == "_gen_task" || id == "_generic_holiday";
+        }
+
+        /// <summary>该事件是否为日常伪事件（UI 判快进可用性用）。</summary>
+        public static bool IsGeneratedDaily(GameEvent ev)
+        {
+            return ev == null || IsGeneratedDailyId(ev.id);
+        }
+
+        /// <summary>屏上是否压着待抉择事件（队列 / 当前事件 / 已构建的非日常事件）。</summary>
+        public static bool PendingChoiceEvent(GameState st)
+        {
+            if (st == null) return false;
+            if (st.queue.Count > 0 || !string.IsNullOrEmpty(st.currentEvent)) return true;
+            return st.runtimeEvent != null && !IsGeneratedDailyId(st.runtimeEvent.id);
+        }
+
+        /// <summary>
+        /// 屏上是否为卷宗场景。**显示（CurrentScene）与输入（Choose）必须共用此判据**，
+        /// 否则待抉择事件在屏时点击会串到卷宗的翻页/核对/签批上（旧版就是两处判据不一致）。
+        /// </summary>
+        public static bool DossierOnScreen(GameState st)
+        {
+            if (st == null || st.hasPending) return false;
+            if (st.phase != Phase.Day) return false;
+            if (st.activeDossier == null || st.activeDossier.resolved) return false;
+            return !PendingChoiceEvent(st);
+        }
+
         public static Scene CurrentScene(GameState st)
         {
             if (st.hasPending)
-                return new Scene { kind = "result", title = st.pendingTitle, paras = st.pendingParas, options = new List<string> { "继 续" } };
+            {
+                // 签批结果页：附上一条“批示”（市长自己的话）。
+                // 有 LLM 时由它涓色（异步回来后会因为场景签名变化而重绘），没有则用确定性回退批语。
+                var pend = new List<string>(st.pendingParas);
+                if (!string.IsNullOrEmpty(st.remark) && st.remarkDossier == st.pendingDossierId)
+                    pend.Add("批示：" + st.remark + (st.remarkAi ? "" : ""));
+                return new Scene { kind = "result", title = st.pendingTitle, paras = pend, options = new List<string> { "继 续" } };
+            }
 
             switch (st.phase)
             {
@@ -226,10 +279,10 @@ namespace Starstate.Core
                     return new Scene { kind = "ending", title = e.title, paras = e.paras, options = new List<string> { "再走一遍（新游戏）", "离开" } };
             }
 
-            // Day / Prologue：脚本事件优先（剧情节点必停），其次卷宗，最后日常
-            if (st.queue.Count > 0 || !string.IsNullOrEmpty(st.currentEvent))
+            // Day / Prologue：待抉择事件优先（剧情节点必停）→ 其次卷宗 → 最后日常
+            if (PendingChoiceEvent(st))
                 return EventScene(st);
-            if (st.activeDossier != null && !st.activeDossier.resolved && st.phase == Phase.Day)
+            if (DossierOnScreen(st))
                 return DossierScene(st);
             return EventScene(st);
         }
@@ -351,8 +404,9 @@ namespace Starstate.Core
 
         private static GameEvent TakeNext(GameState st)
         {
-            if (st.runtimeEvent != null) return st.runtimeEvent;
-            if (st.queue.Count == 0 && string.IsNullOrEmpty(st.currentEvent)) return null;
+            // 待抉择事件优先；日常伪事件在队列里有真事件时让位
+            if (st.runtimeEvent != null && !IsGeneratedDailyId(st.runtimeEvent.id)) return st.runtimeEvent;
+            if (st.queue.Count == 0 && string.IsNullOrEmpty(st.currentEvent)) return st.runtimeEvent;
             if (string.IsNullOrEmpty(st.currentEvent))
             {
                 string id = st.queue[0];
@@ -360,7 +414,12 @@ namespace Starstate.Core
                 st.currentEvent = id;
             }
             var def = ById.ContainsKey(st.currentEvent) ? ById[st.currentEvent] : null;
-            if (def == null) { st.currentEvent = null; return null; }
+            if (def == null)
+            {
+                GameLog.Warn("[FLOW] 未注册的事件 id：" + st.currentEvent + "（已跳过；该 id 当时可能未注册）");
+                st.currentEvent = null;
+                return null;
+            }
             if (def.dynamic)
             {
                 st.currentEvent = null;
@@ -426,8 +485,8 @@ namespace Starstate.Core
 
             string focus = st.week.focus ?? "work";
             if (!ContentRegistry.GenericDayPools.ContainsKey(focus)) focus = "work";
-            // 七品市长：案头日常优先
-            bool mayor = st.grade != null && st.grade.StartsWith("七品");
+            // 七品/六品市长：案头日常优先（走 mayor 池，不再回落到科员线文案）
+            bool mayor = st.grade != null && (st.grade.StartsWith("七品") || st.grade.StartsWith("六品"));
             var pool = mayor && ContentRegistry.GenericDayPools.ContainsKey("mayor")
                 ? ContentRegistry.GenericDayPools["mayor"]
                 : ContentRegistry.GenericDayPools[focus];
@@ -466,30 +525,42 @@ namespace Starstate.Core
             };
         }
 
-        /// <summary>文号：由事件 id 稳定派生（同一文件常年一个号，像真的归过档）。</summary>
+        /// <summary>文号：由事件 id 稳定派生（自算 FNV-1a，不用 string.GetHashCode——后者在不同运行时/进程会随机化）。</summary>
         private static string DocNoFor(string id, GameState st)
         {
-            int n = (id.GetHashCode() & 0x7fffffff) % 180 + 7;
-            return "长发改〔" + Today(st).Year + "〕第 " + n + " 号";
+            int n = (StableHash(id) & 0x7fffffff) % 180 + 7;
+            return "同府发〔" + Today(st).Year + "〕第 " + n + " 号";
+        }
+
+        /// <summary>FNV-1a：跨进程/跨后端（Mono / IL2CPP）稳定的字符串散列。</summary>
+        static int StableHash(string s)
+        {
+            unchecked
+            {
+                int h = (int)2166136261;
+                if (s != null)
+                    for (int i = 0; i < s.Length; i++) { h ^= s[i]; h *= 16777619; }
+                return h;
+            }
         }
 
         private static Scene WeekEndScene(GameState st)
         {
             var d = Today(st);
             var w = st.weekEndData;
-            string place = string.IsNullOrEmpty(st.seconded) ? "综合科" : st.seconded;
+            string place = string.IsNullOrEmpty(st.seconded) ? "市政府办公厅" : st.seconded;
             var paras = new List<string>
             {
-                $"周五下午，{place}例会。本周的活捋一遍——谁的活、到什么程度、下周怎么办。",
-                $"本周你经手 {w.tasks.Count} 项任务，评级分布：{w.avgGrade}。",
+                $"周五下午，{place}把这一周的件过了一遍——哪件办了、哪件还压着、下周哪件必须动。",
+                $"本周你经手 {w.tasks.Count} 项事务，评级分布：{w.avgGrade}。",
                 $"楼里的事：{w.peerLine}",
             };
             return new Scene
             {
                 kind = "week_end",
-                title = $"{GameClock.Fmt(d)} · 周五 · 例会点评",
+                title = $"{GameClock.Fmt(d)} · 周五 · 一周过堂",
                 paras = paras,
-                options = new List<string> { "认真记下，下周改进", "顺便找科长单独聊两句" },
+                options = new List<string> { "认真记下，下周改进", "顺便找办公厅主任单独聊两句" },
             };
         }
 
@@ -517,7 +588,7 @@ namespace Starstate.Core
                 kind = "weekend",
                 title = "周末",
                 paras = paras,
-                options = new List<string> { "彻底休整", "自习充电", "约同学聚聚", "回单位加点班" },
+                options = new List<string> { "彻底休整", "自习充电", "约同僚吃个饭", "回单位加点班" },
             };
         }
 
@@ -560,8 +631,8 @@ namespace Starstate.Core
                 case Phase.Ending: return; // 由 UI 层处理（新游戏/退出）
             }
 
-            // ② 卷宗办理（Phase 5）
-            if (st.activeDossier != null && !st.activeDossier.resolved && st.phase == Phase.Day)
+            // ② 卷宗办理（Phase 5）——判据与 CurrentScene 完全一致
+            if (DossierOnScreen(st))
             {
                 ChooseDossier(st, idx);
                 return;
@@ -596,7 +667,7 @@ namespace Starstate.Core
                 if (eff.task != null)
                 {
                     eff.task.grade = grade;
-                    eff.rel.Add(new RelDelta { id = "zhou", evalv = GradeEval[GradeIndex(grade)] });
+                    eff.rel.Add(new RelDelta { id = "zhoujin", evalv = GradeEval[GradeIndex(grade)] });
                     eff.morale += GradeMorale[GradeIndex(grade)];
                 }
             }
@@ -777,6 +848,7 @@ namespace Starstate.Core
             if (entry == null) return;
             st.hasPending = true;
             st.pendingTitle = d.title;
+            st.pendingDossierId = d.id;
             st.pendingParas = act.pendingResultParas != null && act.pendingResultParas.Count > 0
                 ? act.pendingResultParas
                 : new List<string> { "已签批。" };
@@ -946,22 +1018,22 @@ namespace Starstate.Core
                 exec = w.growth.exec, comm = w.growth.comm, political = w.growth.political,
                 stress = w.stressDelta, morale = w.moraleDelta,
             };
-            eff.rel.Add(new RelDelta { id = "zhou", evalv = w.zhouDelta });
+            eff.rel.Add(new RelDelta { id = "zhoujin", evalv = w.zhouDelta });
 
             var paras = new List<string>();
             if (w.tasks.Count > 0)
-                paras.Add($"周衡之本周在你交的活上画了很多红——也留了很多话。你的综合表现：{w.avgGrade}。");
+                paras.Add($"周谨把这一周的事在你桌上摆成一排，逐件报进度。你的综合表现：{w.avgGrade}。");
             else
-                paras.Add("本周你没有独立经手的任务。周衡之瞥了你一眼：“下周给你压点担子。”");
+                paras.Add("本周你没有独立签办的事务。周谨合上记录本：“下周有两件硬件，我先给您留着。”");
 
             paras.Add(PlanNarrative(st));
             paras.Add(w.peerLine);
 
             if (idx == 1)
             {
-                eff.rel.Add(new RelDelta { id = "zhou", trust = 2, familiar = 2 });
+                eff.rel.Add(new RelDelta { id = "zhoujin", trust = 2, familiar = 2 });
                 eff.energy -= 3;
-                paras.Add("你留下来单独聊了几句。周衡之讲了讲他看好的方向，也点了点你的短板——领导的注意力，本身就是一种资源。");
+                paras.Add("你留下周谨多聊了几句。他讲了讲常委会近来的风向，也点了点你没注意的两个人——办公厅主任的嘴，是最便宜的预警系统。");
             }
 
             ApplyEffects(st, eff, null);
@@ -987,8 +1059,8 @@ namespace Starstate.Core
             switch (idx)
             {
                 case 1: fx = new Effects { professional = 1, energy = -4 }; text = "你把一个上午给了规划文本，一个下午给了《监察法》条文。周末的教室只有你一个人——还有一种上进的孤独感。"; break;
-                case 2: fx = new Effects { comm = 1, morale = 3, energy = -3, rel = new List<RelDelta> { new RelDelta { id = "su", familiar = 3 }, new RelDelta { id = "xu", familiar = 3 } } }; text = "同批新人聚了顿火锅。许飞聊各自的科室，苏晴聊通勤，何斌聊八卦——你发现这批人里，你最信任的可能是最安静的苏晴。"; break;
-                case 3: fx = new Effects { exec = 1, energy = -14, stress = 2, reputation = 1, rel = new List<RelDelta> { new RelDelta { id = "zhou", trust = 1, evalv = 1, memo = "周末还能看见他" } } }; text = "你在空荡的办公室里加了一天班。周一大家看到系统里的文档更新时间，什么都没说——但什么都说了。"; break;
+                case 2: fx = new Effects { comm = 1, morale = 3, energy = -3, rel = new List<RelDelta> { new RelDelta { id = "xu", familiar = 3 }, new RelDelta { id = "shao", familiar = 2 } } }; text = "你和邻市的许飞、常务副市长邵志远吃了一顿饭。饭桌上聊项目、聊孩子，也聊省里最近的用人风——关系就是这样一顿一顿吃出来的。"; break;
+                case 3: fx = new Effects { exec = 1, energy = -14, stress = 2, reputation = 1, rel = new List<RelDelta> { new RelDelta { id = "zhoujin", trust = 1, evalv = 1, memo = "周末还能看见他" } } }; text = "你在空荡的办公室里加了一天班。周一大家看到文件流转记录的时间戳，什么都没说——但什么都说了。"; break;
                 default: fx = new Effects { energy = 6, stress = -6, morale = 2 }; text = "你把手机调成勿扰，睡了懒觉，去了趟渭河生态带。风从水面上来，把一周的文件气都吹散了。"; break;
             }
             ApplyEffects(st, fx, null);
@@ -1037,6 +1109,32 @@ namespace Starstate.Core
                 if (st.log[i].date.StartsWith(mk) && st.log[i].kind != "系统" && !string.IsNullOrEmpty(st.log[i].text))
                     digest.Add(st.log[i].text);
             if (digest.Count > 0) data.monthDigest = "本月大事记：" + string.Join("；", digest.ToArray()) + "。";
+
+            // —— 两把尺的月度回补（长线只跌不涨会让两条尺在十年里必然归零）——
+            // 规则：本月办过件且一个雷都没漏 → 合规 +1；案头清空且无逾期 → 效率 +1。
+            // 刻意做小：回补只防“死亡螺旋”，真正的涨幅得靠在卷宗上的取舍。
+            if (st.month.dossiersResolved > 0)
+            {
+                var recover = new List<string>();
+                if (st.month.missedIssues == 0)
+                {
+                    st.compliance = Math.Min(100, st.compliance + 1);
+                    recover.Add("本月无漏查，合规 +1");
+                }
+                if (st.month.overdueCount == 0 && st.pendingDossierIds.Count == 0)
+                {
+                    st.efficiency = Math.Min(100, st.efficiency + 1);
+                    recover.Add("案头清空无逾期，效率 +1");
+                }
+                if (recover.Count > 0)
+                    data.monthDigest = (data.monthDigest ?? "") + "（两把尺：" + string.Join("；", recover.ToArray()) + "）";
+            }
+
+            // —— 风险账本：一个月没添新账就回落 1（主动交底也在 AddRisk 里直接减账）——
+            // 回落刻意很慢：制度记忆比人长，一次灰区处置要一年干净日子才淡。
+            if (st.month.riskGain == 0 && st.riskLedger > 0) st.riskLedger--;
+            st.month.riskGain = 0;
+            RefreshRisk(st);
             st.monthEndData = data;
         }
 
@@ -1049,6 +1147,8 @@ namespace Starstate.Core
             st.AddLog("系统", $"{m.monthLabel}月度结算：结余 {m.netIncome} 元；试用期进度 {m.probation}/12；本月任务 {m.tasksTotal} 项。");
             st.month.key = GameClock.MonthKey(GameClock.AddDays(lastDay, 1));
             st.month.tasks.Clear();
+            st.month.dossiersResolved = 0; st.month.missedIssues = 0; st.month.overdueCount = 0; st.month.riskGain = 0;
+            st.monthEndData = null;
 
             st.hasPending = true;
             st.pendingTitle = $"{m.monthLabel} · 结账";
@@ -1084,7 +1184,7 @@ namespace Starstate.Core
             if (st.phase != Phase.Day || st.hasPending) return;
             // 护栏：屏上有待抉择事件时禁止快进（否则事件被标记已触发却未结算，永久丢失）
             if (!string.IsNullOrEmpty(st.currentEvent)) return;
-            if (st.runtimeEvent != null && st.runtimeEvent.id != "_generic_day" && st.runtimeEvent.id != "_gen_task") return;
+            if (!IsGeneratedDaily(st.runtimeEvent)) return;
             int days = 0, tasks = 0, months = 0, dossiers = 0;
             int guard = 0;
             while (guard++ < 8000)
@@ -1104,13 +1204,22 @@ namespace Starstate.Core
                     var dz = DossierEngine.Current(st);
                     if (act != null && !act.resolved && dz != null)
                     {
-                        int chosen = 0;
-                        for (int oi = 0; oi < dz.options.Count; oi++)
+                        // 快进也必须像玩家一样翻页核对——否则每件都按“全部漏查”扣分，
+                        // 十年快进会把合规分打到 0，“两把尺”在长线里等于不存在。
+                        int sweep = 0;
+                        while (act.checksLeft > 0 && sweep++ < 32)
                         {
-                            string reason;
-                            if (DossierEngine.OptionAvailable(st, dz.options[oi], out reason))
-                            { chosen = oi; break; }
+                            var found = DossierEngine.CheckPage(st);
+                            if (found == null)
+                            {
+                                if (act.page >= dz.pages.Count) break;
+                                DossierEngine.TurnPage(st, +1);
+                            }
                         }
+
+                        // 静默办结：用“尽责市长”启发式（避程序违规/避灰区，再比合规分）——
+                        // 只看合规分会系统性挑中灰区选项（它们面子上合规分更高）。
+                        int chosen = DossierEngine.BestOptionIndex(st, dz);
                         var entry = DossierEngine.Resolve(st, chosen);
                         DossierEngine.CloseActive(st);
                         if (entry != null) dossiers++;
@@ -1174,6 +1283,7 @@ namespace Starstate.Core
             months++;
             st.month.key = GameClock.MonthKey(GameClock.AddDays(d, 1));
             st.month.tasks.Clear();
+            st.month.dossiersResolved = 0; st.month.missedIssues = 0; st.month.overdueCount = 0; st.month.riskGain = 0;
             var nd = GameClock.AddDays(d, 1);
             st.date = GameClock.Iso(nd);
             st.currentEvent = null;
@@ -1182,6 +1292,32 @@ namespace Starstate.Core
             CollectDue(st, nd);
             if (nd.DayOfWeek == DayOfWeek.Monday) { ResetWeek(st, nd); st.phase = Phase.WeekPlan; }
             else st.phase = Phase.Day;
+        }
+
+        // ---------------- 风险账本（M3）与后果链 ----------------
+
+        /// <summary>
+        /// 风险账本：组织对你的存疑累积。与两把尺不同，它是**不可见的历史账**——
+        /// 高合规分并不能抹掉它（相反：“件件照准”的人往往合规分高而风险账本重）。
+        /// 阈值：40 → 纪委谈话提醒；65 且程序违规≥2 → 立案审查（结局）。
+        /// </summary>
+        public static void AddRisk(GameState st, int n, string reason)
+        {
+            if (st == null || n == 0) return;
+            int before = st.riskLedger;
+            st.riskLedger = Math.Max(0, Math.Min(100, st.riskLedger + n));
+            if (n < 0) return;
+            st.month.riskGain += n;
+            if (st.log != null && st.riskLedger >= 40 && before < 40)
+                st.AddLog("系统", "纪委监委在你近期的签批里标了几处记号。");
+            if (st.riskLedger >= 65 && st.violationCount >= 2) st.SetFlag("risk_investigation", true);
+        }
+
+        /// <summary>年度考核前评估风险状态（月度调用）：挂/撤谈话提醒标记，过线则置立案标志。</summary>
+        private static void RefreshRisk(GameState st)
+        {
+            if (st.riskLedger >= 40) st.Mark("risk_watch"); else st.Unmark("risk_watch");
+            if (st.riskLedger >= 65 && st.violationCount >= 2) st.SetFlag("risk_investigation", true);
         }
 
         // ---------------- 动态事件（状态相关的系统事件） ----------------
@@ -1193,8 +1329,11 @@ namespace Starstate.Core
                 case "sys_personnel": return BuildPersonnel(st);
                 case "sys_annual_eval": return BuildAnnualEval(st);
                 case "sys_ending": return BuildEnding(st);
+                case "sys_risk_talk": return BuildRiskTalk(st);
+                case "sys_investigation": return BuildInvestigation(st);
                 case "npc_initiative": return BuildNpcInitiative(st);
             }
+            GameLog.Warn("[FLOW] 动态事件无构建器：" + id + "（该次触发被丢弃）");
             return null;
         }
 
@@ -1270,18 +1409,53 @@ namespace Starstate.Core
         private enum NpcKind { Ask, Gossip, Meal }
 
 
-        /// <summary>每年9月的人事窗口：按总设定晋升年限与条件给出任命选项。</summary>
+        /// <summary>每年9月的人事窗口：七品→六品（满一届＋两把尺达标才进酝酿名单）。</summary>
         private static GameEvent BuildPersonnel(GameState st)
         {
             int years = Career.GradeYears(st);
             var paras = new List<string>
             {
-                "九月，全局人事窗口开启。任雪梅抱着档案袋挨个科室走——每年这个时候，走廊里的目光都比平时忙。",
+                "九月，人事窗口又开了。组织部的档案袋在走廊尽头进出——到了七品这一步，能决定你去向的会已经不在市里。",
                 $"你的现任职级：{st.grade}（任职满 {years} 年）。" +
                 (string.IsNullOrEmpty(st.seconded) ? "" : $"当前编制状态：{st.seconded}。"),
                 $"同批的风声：{Npcs.Name(st.rival.id)}今年的势头不小（晋升竞争力 {st.rival.progress}/100）——人事窗口前，每个人都在跟时间赛跑。",
             };
             var opts = new List<EventOption>();
+
+            // —— Phase 5：七品 → 六品（总设定：一届 5 年＋考核累计优良＋履历完整）——
+            string reason6;
+            if (Career.CanCompete6(st, out reason6))
+            {
+                paras.Add("韩清把一份履历推到你面前：“中央组织委员会的备案函下周到省里。名单上有没有大同，取决于你这五年的两把尺。”");
+                opts.Add(new EventOption
+                {
+                    label = "接受六品酝酿，报中央组织委员会备案",
+                    effects = new Effects
+                    {
+                        gradeTo = "六品·副省", morale = 8, reputation = 3, polCapital = 5,
+                        rel = new List<RelDelta> { new RelDelta { id = "han", trust = 2, evalv = 2, memo = "六品酝酿——档案过关" } },
+                        logKind = "系统", logText = "进六品酝酿名单（报中央组织委员会备案）"
+                    },
+                    result = "备案函在公文包里轻得像一张纸，重得像一座城。你在签字栏上方停了半秒——七品这五年所有漏查的雷、所有压下的报告，都在这半秒里过了一遍。"
+                });
+                opts.Add(new EventOption
+                {
+                    label = "暂不报，把大同的事做完一届",
+                    effects = new Effects
+                    {
+                        morale = 3, reputation = 1,
+                        rel = new List<RelDelta> { new RelDelta { id = "cen", trust = 1, memo = "谢绝六品酝酿，留任大同" } },
+                        logKind = "系统", logText = "谢绝六品酝酿，留任大同"
+                    },
+                    result = "岑伯衡听完只问了三个字：“想清楚了？”你说想清楚了。留在七品的人，未必是没有野心的人。"
+                });
+            }
+            else
+            {
+                paras.Add($"六品酝酿的条件还没攒齐：{reason6}。");
+            }
+
+            // —— 旧吏轨留桩（Phase 5 恒 false，保留供内容迁移参考）——
             if (Career.CanPromoteLi2(st))
             {
                 paras.Add("周衡之在谈话表上签了字：“两年科员，考核都过得去。组织上想给你压担子了。”");
@@ -1355,8 +1529,9 @@ namespace Starstate.Core
                 $"考核办调取了你{year}年的全部档案：{st.yearTaskCount} 项任务、评级分布、程序合规记录。",
                 "考核等第：优秀／称职／基本称职／不称职。“优秀”名额有限，同批人都在盯着——评优评先，评的是一年的分量。",
             };
-            string outcome = Career.EvaluateYear(st, true, Rng);
-            string plain = Career.EvaluateYear(st, false, Rng);
+            // 考核结果在“呈现时”就定下来（不接 Rng）：否则存读档可以刷新等第（save-scum）
+            string outcome = Career.EvaluateYear(st, true, null);
+            string plain = Career.EvaluateYear(st, false, null);
             var opts = new List<EventOption>
             {
                 new EventOption
@@ -1383,6 +1558,81 @@ namespace Starstate.Core
             {
                 id = "_dyn_annual", type = "politics", title = $"年度考核 · {year}年度",
                 paras = paras, options = opts,
+            };
+        }
+
+        /// <summary>纪委谈话提醒（风险账本≥ 40；每年 11 月最多一次）。</summary>
+        private static GameEvent BuildRiskTalk(GameState st)
+        {
+            int grade = st.violationCount >= 3 ? 3 : st.violationCount >= 2 ? 2 : 1;
+            var paras = new List<string>
+            {
+                $"市纪委监委的同志来市政府“了解情况”，约在会客室，没有录音，只有两杯茶。",
+                $"“近两年，你签批的件里有一些…我们标了记号。”对方把一页纸推过来，上面是四五个日期，后面跟着卷宗名。",
+            };
+            if (grade >= 2) paras.Add("“不要紧，现在还都是'了解'。”他笑了一下，“了解”两个字在机关里从来不是副词，是阶段。");
+            else paras.Add("“谈不上问题，只是提前说一声。”他写完记录把本子合上，“你这条路还长。”");
+            return new GameEvent
+            {
+                id = "_dyn_risk_talk", type = "politics", title = "谈话提醒",
+                paras = paras,
+                options = new List<EventOption>
+                {
+                    new EventOption
+                    {
+                        label = "当场说明情况，主动交底",
+                        effects = new Effects { risk = -12, compliance = 2, political = 1,
+                            document = new DocRecord { title = "谈话提醒情况说明", note = "主动说明近期签批中的疑点", signature = "本人" },
+                            logKind = "纪法", logText = "接受谈话提醒并主动说明" },
+                        result = "你把三份件的来龙去脉讲了四十分钟，包括对自己不利的那一段。对方记了三页。主动交底会难看一阵子，但账会清一段。",
+                    },
+                    new EventOption
+                    {
+                        label = "按程序说明，不多说一句",
+                        effects = new Effects { risk = -3, stress = 2,
+                            logKind = "纪法", logText = "接受谈话提醒（按程序说明）" },
+                        result = "你只答被问到的。二十分钟结束，茶没凉。回去的路上你想起自己没说的那些——它们只是被别在了另一张纸上。",
+                    },
+                    new EventOption
+                    {
+                        label = "把话拧回去，反问他依据",
+                        effects = new Effects { risk = 8, stress = 3, political = -1,
+                            logKind = "纪法", logText = "谈话提醒中与纪委争执" },
+                        result = "你反问了三句。对方始终笑着，最后把本子收起来：“那今天先到这里。”——本子合上的速度，比任何一句话都危险。",
+                    },
+                },
+            };
+        }
+
+        /// <summary>立案审查（风险账本≥ 65 且程序违规≥ 2）——直入结局。</summary>
+        private static GameEvent BuildInvestigation(GameState st)
+        {
+            return new GameEvent
+            {
+                id = "_dyn_investigation", type = "politics", title = "立案审查",
+                paras = new List<string>
+                {
+                    "那天下班前，办公厅来了两位同志，请你“配合工作一段时间”。",
+                    $"后来你才知道，起点是一件{GameClock.Parse(st.date).Year - 3}年的件——当时你只批了两个字：“照准”。",
+                    "卷宗柜里的每一页都被复印、编号、对时。你这才明白，制度从不因为你签得快而不记账，它只是记在别处。",
+                },
+                options = new List<EventOption>
+                {
+                    new EventOption
+                    {
+                        label = "配合组织，如实说明",
+                        effects = new Effects { underInvestigation = true,
+                            logKind = "纪法", logText = "接受审查调查（如实说明）" },
+                        result = "",
+                    },
+                    new EventOption
+                    {
+                        label = "交代问题前，先把话说完",
+                        effects = new Effects { underInvestigation = true, risk = 5,
+                            logKind = "纪法", logText = "接受审查调查（拒不认错）" },
+                        result = "",
+                    },
+                },
             };
         }
 
@@ -1417,20 +1667,46 @@ namespace Starstate.Core
                 comm = e.comm, political = e.political,
                 energy = e.energy, stress = e.stress, morale = e.morale,
                 reputation = e.reputation, polCapital = e.polCapital, moneyDelta = e.moneyDelta,
+                compliance = e.compliance, efficiency = e.efficiency, risk = e.risk,
                 rel = new List<RelDelta>(e.rel ?? new List<RelDelta>()),
                 setFlags = e.setFlags != null ? new List<string>(e.setFlags) : new List<string>(),
                 setMarks = e.setMarks != null ? new List<string>(e.setMarks) : new List<string>(),
                 clearMarks = e.clearMarks != null ? new List<string>(e.clearMarks) : new List<string>(),
                 echoes = e.echoes != null ? new List<EchoSpec>(e.echoes) : new List<EchoSpec>(),
                 clockOps = e.clockOps != null ? new List<ClockOp>(e.clockOps) : new List<ClockOp>(),
-                task = e.task, document = e.document, integrity = e.integrity, commend = e.commend,
+                task = CloneTask(e.task), document = CloneDoc(e.document),
+                integrity = CloneIntegrity(e.integrity), commend = CloneCommend(e.commend),
                 logKind = e.logKind, logText = e.logText, gotoWork = e.gotoWork,
                 gradeTo = e.gradeTo, route = e.route, seconded = e.seconded, partner = e.partner,
                 baseExpDelta = e.baseExpDelta, evalGrade = e.evalGrade, clearYearStats = e.clearYearStats,
                 ambition = e.ambition, housing = e.housing,
                 ending = e.ending, resigned = e.resigned, underInvestigation = e.underInvestigation,
+                adverse = e.adverse,
                 marry = e.marry, child = e.child,
             };
+        }
+
+        // —— 记录对象深拷贝：注册/模板事件的 Effects 是共享实例；若只传引用，多份档案会指向同一对象，
+        //    后一次的 date/note 会覆盖前一次的记录（程序合规档案最早暴露这个问题）。——
+        static TaskRecord CloneTask(TaskRecord t)
+        {
+            return t == null ? null : new TaskRecord
+            { date = t.date, title = t.title, grade = t.grade, note = t.note, signature = t.signature, flagged = t.flagged };
+        }
+
+        static DocRecord CloneDoc(DocRecord d)
+        {
+            return d == null ? null : new DocRecord { date = d.date, title = d.title, signature = d.signature, note = d.note };
+        }
+
+        static IntegrityRecord CloneIntegrity(IntegrityRecord r)
+        {
+            return r == null ? null : new IntegrityRecord { date = r.date, tag = r.tag, note = r.note };
+        }
+
+        static CommendRecord CloneCommend(CommendRecord c)
+        {
+            return c == null ? null : new CommendRecord { date = c.date, text = c.text };
         }
 
         public static void ApplyEffects(GameState st, Effects e, string grade = null)
@@ -1447,6 +1723,9 @@ namespace Starstate.Core
             p.morale = Clamp(p.morale + e.morale, 0, 100);
             p.reputation = Math.Max(0, p.reputation + e.reputation);
             p.polCapital = Math.Max(0, p.polCapital + e.polCapital);
+            if (e.compliance != 0) st.compliance = Math.Max(0, Math.Min(100, st.compliance + e.compliance));
+            if (e.efficiency != 0) st.efficiency = Math.Max(0, Math.Min(100, st.efficiency + e.efficiency));
+            if (e.risk != 0) AddRisk(st, e.risk, "事件");
             if (e.moneyDelta != 0) p.savings += e.moneyDelta;
 
             if (e.rel != null)
@@ -1481,9 +1760,12 @@ namespace Starstate.Core
                 st.integrity.Add(e.integrity);
                 st.violationCount++;
                 st.yearIntegrity++;
+                // 同时写 mark：mark 与 flag 是两套存储，而 md 事件调度（MarksMet）**只认 mark**。
+                // 只 SetFlag 而不 Mark 的话，内容层写 requireNotMarks=["violation_severe"] 会永远不生效。
+                st.Mark("has_violation");
                 if (st.violationCount == 2) st.SetFlag("violation_2", true);
                 if (st.violationCount == 3) st.SetFlag("violation_3", true);
-                if (st.violationCount >= 4) st.SetFlag("violation_severe", true);
+                if (st.violationCount >= 4) { st.SetFlag("violation_severe", true); st.Mark("violation_severe"); }
             }
             if (e.commend != null) { e.commend.date = st.date; st.commendations.Add(e.commend); }
 
@@ -1522,7 +1804,27 @@ namespace Starstate.Core
                 st.yearTaskCount = 0;
                 st.yearIntegrity = 0;
                 st.AddLog("政治", $"{year}年度考核等第：{e.evalGrade}");
+
+                // —— M3 后果链：让“不称职/降级”成为可达结局，但**分级、不偷袭** ——
+                // 第一次不称职：降级留任（写警告标记、扣合规），只有再犯才免职；
+                // 累计三次基本称职：降级调离。（旧实现只有一个“基本称职”出口且毫无后续。）
+                int plain = 0, unqualified = 0;
+                foreach (var ev in st.evals)
+                {
+                    if (ev.grade == "基本称职") plain++;
+                    if (ev.grade == "不称职") unqualified++;
+                }
+                if (e.evalGrade == "不称职")
+                {
+                    st.Mark("adverse_warn");
+                    st.compliance = Math.Max(0, st.compliance - 10);
+                    if (unqualified >= 2) st.adverse = "免职";          // 第二次不称职 → 结局
+                    else st.AddLog("政治", "考核不称职：降级留任，再有一次免职");
+                }
+                else if (plain >= 3 && string.IsNullOrEmpty(st.adverse)) st.adverse = "降级";
+                if (!string.IsNullOrEmpty(st.adverse)) { st.endingData = Career.ComputeEnding(st); st.phase = Phase.Ending; }
             }
+            if (e.adverse.Length > 0) { st.adverse = e.adverse; st.endingData = Career.ComputeEnding(st); st.phase = Phase.Ending; }
             if (e.ending)
             {
                 st.endingData = Career.ComputeEnding(st);

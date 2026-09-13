@@ -141,13 +141,18 @@ namespace Starstate.Core
 
         public static GameEvent Generate(GameState st, DateTime d)
         {
-            string route = st.route;
-            var candidates = new List<Template>();
+            // 路线偏好：六成概率从路线相关模板里抽，其余走进通用池。
+            // （旧实现是硬过滤：route 一旦与模板标籾不匹配，可选模板会解减一半；
+            //   而且路线键已改为 Phase 5 的 industry/people/project/uplink，需要映射。）
+            string legacy = LegacyRoute(st.route);
+            var all = new List<Template>();
+            var preferred = new List<Template>();
             foreach (var t in Pool)
             {
-                if (t.routes == null || t.routes.Length == 0) candidates.Add(t);
-                else if (route != null && Array.IndexOf(t.routes, route) >= 0) candidates.Add(t);
+                all.Add(t);
+                if (legacy != null && t.routes != null && Array.IndexOf(t.routes, legacy) >= 0) preferred.Add(t);
             }
+            var candidates = (preferred.Count > 0 && Rng.NextDouble() < 0.6) ? preferred : all;
             var t2 = candidates[Rng.Next(candidates.Count)];
 
             // 决策骨架抽签：例行 / 限时交办 / 协作 / 有程序风险 / 当众露脸
@@ -158,6 +163,19 @@ namespace Starstate.Core
                         : roll < 0.92 ? "risk"
                         : "stage";
             return BuildByKind(st, t2, kind);
+        }
+
+        /// <summary>Phase 5 路线键 → 本文件旧科员线模板的标签（null = 不做偏好，走通用池）。
+        /// 民生兜底暂无对应池子，故意返回 null（宁可不偏好，也不要拿错池子替换日常）。</summary>
+        static string LegacyRoute(string route)
+        {
+            switch (route)
+            {
+                case "industry": return "产业经济";
+                case "project": return "投资项目";
+                case "uplink": return "区域协调";
+            }
+            return null;
         }
 
         /// <summary>同一任务主题 × 五种决策骨架：选项结构、代价与回报各不相同。</summary>

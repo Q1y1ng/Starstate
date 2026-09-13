@@ -15,11 +15,16 @@ namespace Starstate.Ui
     {
         private static System.Diagnostics.Process proc;
         private static bool starting;   // 防止测试连接与自动拉起并发启动两个服务进程
+        private static float startingSince;
 
         public static bool Running { get { return proc != null && !proc.HasExited; } }
 
         public static IEnumerator EnsureRunning(LlmConfig cfg, Action<string> status, Action<bool> done)
         {
+            // 防呆：协程若因宿主对象销毁/场景切换被中断，starting 会永远卡在 true
+            // → 之后每次都走“已有启动在途”分支，白等 240s 且自动拉起永久失效。
+            if (starting && Time.realtimeSinceStartup - startingSince > 300f) starting = false;
+
             // ① 已有服务在跑（外部启动过 / 本进程已拉起）→ 健康即直接用
             status("正在检查本地模型服务…");
             bool healthy = false;
@@ -91,6 +96,7 @@ namespace Starstate.Ui
             var seen = new HashSet<string>();
 
             starting = true;
+            startingSince = Time.realtimeSinceStartup;
             for (int a = 0; a < labels.Length; a++)
             {
                 string args = "-m \"" + gguf + "\" --host 127.0.0.1 --port " + cfg.port +

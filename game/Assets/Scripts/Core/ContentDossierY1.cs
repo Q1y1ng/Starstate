@@ -146,6 +146,7 @@ namespace Starstate.Core
                 docNo = "同应急〔2027〕22号",
                 org = "市应急管理局",
                 deadline = "2027-07-20",
+                releaseFrom = "2027-06-15",
                 checkBudget = 2,
                 pages = new List<DossierPage>
                 {
@@ -357,6 +358,7 @@ namespace Starstate.Core
                 docNo = "同巡整〔2027〕12号",
                 org = "市行政审批服务局",
                 deadline = "2027-03-31",
+                releaseFrom = "2027-02-20",
                 checkBudget = 3,
                 pages = new List<DossierPage>
                 {
@@ -581,6 +583,7 @@ namespace Starstate.Core
                 docNo = "同交通〔2027〕58号",
                 org = "市交通运输局",
                 deadline = "2027-05-10",
+                releaseFrom = "2027-04-01",
                 checkBudget = 2,
                 pages = new List<DossierPage>
                 {
@@ -801,6 +804,7 @@ namespace Starstate.Core
                 docNo = "同审〔2027〕9号",
                 org = "市审计局（转）",
                 deadline = "2027-11-20",
+                releaseFrom = "2027-10-15",
                 checkBudget = 3,
                 pages = new List<DossierPage>
                 {
@@ -985,6 +989,7 @@ namespace Starstate.Core
                 docNo = "同应急〔2027〕103号",
                 org = "市应急管理局",
                 deadline = "2027-08-08",
+                releaseFrom = "2027-07-01",
                 checkBudget = 2,
                 pages = new List<DossierPage>
                 {

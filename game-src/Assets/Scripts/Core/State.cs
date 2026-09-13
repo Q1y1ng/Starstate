@@ -6,6 +6,10 @@ namespace Starstate.Core
     {
         public static GameState NewGame(string playerName = "沈砚舟", string origin = "origin_huabei", string patron = "patron_merit")
         {
+            // 内容注册兜底：任何开局/读档路径都必须带着内容走。
+            // 双保险＝GameApp.Init（运行时）+ 这里（引擎入口，测试可直接覆盖）；RegisterAll 自愈且幂等。
+            ContentRegistry.RegisterAll();
+
             var st = new GameState
             {
                 saveVersion = 5,
