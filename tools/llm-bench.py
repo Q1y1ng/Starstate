@@ -281,7 +281,8 @@ def main():
                       "between", a["name"], b["name"])
                 report["est_prefill_tps_from_slope"] = round(est_prefill, 1)
 
-    out = "E:/Starstate/tmpbuild/llm-bench.json"
+    import os as _os
+    out = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "tmpbuild", "llm-bench.json")
     with open(out, "wb") as f:
         f.write(json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"))
     print("written:", out)

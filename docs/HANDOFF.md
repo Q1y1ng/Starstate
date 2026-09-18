@@ -87,21 +87,22 @@
 ## 5. 验证门禁
 
 ```bash
-# ① 编译（**四程序集**：uGUI / Core / Ui / Editor / Tests——Tests 已进门禁）
-"C:\Program Files\Git\bin\bash.exe" E:/Starstate/tools/check-compile.sh
+# ① 编译（**五程序集**：uGUI / Core / Ui / Editor / Tests——Tests 已进门禁）
+#    路径从脚本位置推导，项目挪到哪都行；在项目根执行：
+"C:\Program Files\Git\bin\bash.exe" tools/check-compile.sh
 
-# ② 同步（PowerShell）
-robocopy E:\Starstate\game-src\Assets\Scripts E:\Starstate\game\Assets\Scripts /E /XF *.meta
+# ② 同步（PowerShell，在项目根执行）
+robocopy game-src\Assets\Scripts game\Assets\Scripts /E /XF *.meta
 
 # ③ EditMode（结果 XML 先写出，进程常挂——读 XML；只杀 -batchmode 实例）
-# Unity: D:\pro\unity\Editor\Unity.exe -batchmode -nographics -projectPath E:/Starstate/game
+# Unity: D:\pro\unity\Editor\Unity.exe -batchmode -nographics -projectPath E:/AI/Starstate/game
 #   -runTests -testPlatform EditMode -testResults <xml> -logFile <log>
 # ④ 再跑下一轮前先确认上一轮实例已退出（否则报“工程已在另一实例中打开”）：
 #   Get-CimInstance Win32_Process -Filter "Name='Unity.exe'" | ? { $_.CommandLine -like '*-batchmode*' } | % { Stop-Process -Id $_.ProcessId -Force }
 
 # ⑤ 内容/平衡秒级探针（脱离 Unity 跑 Core）：改卷宗/链/数值后先跑这个
 #   输出：卷宗注册数（手写/模板）、来文形态、第一年空周数、十年长跑结局与两把尺
-"C:\Program Files\Git\bin\bash.exe" E:/Starstate/tools/core-probe.sh all
+"C:\Program Files\Git\bin\bash.exe" tools/core-probe.sh all
 ```
 
 当前基线：**check-compile ALL_OK（5 段）+ EditMode 95/95 全绿**（2026-09-12）。

@@ -7,7 +7,11 @@ namespace Starstate.EditorTools
     /// <summary>Windows 独立可执行构建（batchmode 可调用）。</summary>
     public static class BuildPlayer
     {
-        private const string OutDir = "E:/Starstate/builds/Starstate";
+        // 输出目录从工程位置推导（2026-09-18 E 盘格式化重建时改为位置无关：以前硬编码 E:/Starstate，换目录即写到别处）
+        private static string OutDir
+        {
+            get { return Path.GetFullPath(Path.Combine(Application.dataPath, "../../builds/Starstate")); }
+        }
 
         [MenuItem("STARSTATE/构建 Windows 包")]
         public static void BuildWindows()

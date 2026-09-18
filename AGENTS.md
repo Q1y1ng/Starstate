@@ -23,7 +23,7 @@
 
 **技术栈**：Unity 2022.3.57f1c2（本机编辑器，升级路径 Unity 6 LTS）+ C#。模拟核心（`Core/`）为纯 C#、不依赖 UnityEngine，保证可测试可迁移；UGUI 由代码构建；中文渲染用 OS 字体。另有**大模型增强层**（本地 llama-server 或 OpenAI 兼容 API：NPC 交谈＋AI 日常小事件，效果白名单制、可整体关闭，详见 changelog/PHASE-3.md 补丁四）。详见 [docs/PHASE3-DESIGN.md](docs/PHASE3-DESIGN.md)。
 
-- 工程位置：`E:\Starstate\game`（Unity 工程）；代码暂存区：`E:\Starstate\game-src\`（Assets 镜像，改动先改这里再同步）
+- 工程位置：`E:\AI\Starstate\game`（Unity 工程）；代码暂存区：`E:\AI\Starstate\game-src\`（Assets 镜像，改动先改这里再同步）
 - **Boot 场景不挂任何脚本**：GameBootstrap 由 `[RuntimeInitializeOnLoadMethod]` 运行时自举；场景报 missing script 时用菜单 STARSTATE/创建 Boot 场景 重建（重建只生成摄像机）
 - 开发历程：见 `changelog/`（每 Phase 一个文件，倒序记录）
 
@@ -61,7 +61,7 @@
 
 ## 6. 工作约定
 
-- 所有产出文件放在本项目 `E:\Starstate` 下；世界观资料只读。
+- 所有产出文件放在本项目 `E:\AI\Starstate` 下；世界观资料只读。
 - 设计决策变更时同步更新 FOUNDATION REPORT 与 OPEN_QUESTIONS（保持一致）。
 - **Unity 工程纪律**：从 `game-src/` 同步代码只增改、**绝不删除 `game/Assets` 下的 `.meta` 文件**（GUID 稳定性，删了会导致场景引用断裂报"referenced script is missing"）；不要用 taskkill 强杀正在导入的 Unity；场景（Boot.unity）可随时用菜单 STARSTATE→创建 Boot 场景 重建。
 - **玩法相关待确认项已全部获作者批复确认（2026-09-06，见 OPEN_QUESTIONS）**：长安市发展和改革局（全国市级标配）、科室参考现代中国、考核以评优评先为目的、录用无选调按成绩排名、母校＝国立中央翰林院大学、科员月薪≈市收入中位数（小康偏中产）、第一年住公租房、婚恋家庭为副线、结局系统（退休/辞职/被审查入狱等多结局）、声望/政治资本速率随职级递增。仅剩世界观遗留6项（Q1，不阻塞）。

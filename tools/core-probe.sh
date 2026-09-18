@@ -4,7 +4,8 @@
 # 用法：bash tools/core-probe.sh [all|content|long]
 set -e
 
-ROOT="E:/Starstate"
+# Git Bash 的 pwd 是 /e/... 形式，会被 csc 误解析 → 用 pwd -W 取盘符形式
+ROOT="$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -W)")"
 DATA="D:/pro/unity/Editor/Data"
 API="$DATA/MonoBleedingEdge/lib/mono/4.7.1-api"
 CSC="$DATA/DotNetSdkRoslyn/csc.dll"

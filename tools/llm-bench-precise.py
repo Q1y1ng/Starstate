@@ -208,7 +208,8 @@ def main():
         print("\nest_prefill_tps_slope_400_to_max:", slope)
         out.append({"est_prefill_tps_slope": slope})
 
-    path = "E:/Starstate/tmpbuild/llm-bench-precise.json"
+    import os as _os
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "tmpbuild", "llm-bench-precise.json")
     with open(path, "wb") as f:
         f.write(json.dumps(out, ensure_ascii=False, indent=2).encode("utf-8"))
     print("written", path)
