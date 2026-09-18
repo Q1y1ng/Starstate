@@ -20,9 +20,73 @@ public static class Probe
         string mode = args != null && args.Length > 0 ? args[0] : "all";
         if (mode == "all" || mode == "content") Content();
         if (mode == "all" || mode == "long") LongRun();
+        if (mode == "prompts") DumpPrompts();
         Console.Out.Flush();
         try { System.IO.File.WriteAllText("probe-out.txt", log.ToString(), System.Text.Encoding.UTF8); } catch { }
         Console.Error.Write(log.ToString());
+    }
+
+    // ---------------- 导出游戏真实提示词（供模型横向评测） ----------------
+
+    static void DumpPrompts()
+    {
+        DossierEngine.Clear();
+        ContentRegistry.RegisterAll();
+        Flow.SeedRng(20260901);
+        var st = State.NewGame("沈砚舟");
+        Flow.Begin(st);
+        // 造一个中局状态：让提示词里的数值/关系/案头都真实
+        st.compliance = 78; st.efficiency = 62; st.riskLedger = 22;
+        st.date = "2027-03-10"; st.route = "industry";
+        st.marks.Add("route_industry");
+        st.knownRules.Add("rule_shuzi");
+        st.deskRules.Add("rule_shuzi");
+        st.plan.work = 40; st.plan.study = 15; st.plan.social = 20; st.plan.family = 15; st.plan.rest = 10;
+        for (int i = 0; i < 3; i++)
+            st.dossierLog.Add(new DossierLogEntry { date = "2027-03-0" + (8 + i), title = "关于追加专项经费的请示", disposition = "退回补正", issuesMissed = 1, issuesFound = 1 });
+        st.log.Add(new LogEntry { date = "2027-03-09", kind = "卷宗", text = "退回补正：关于追加专项经费的请示" });
+
+        var items = new List<string[]>();
+        items.Add(new[] { "system", LlmPrompt.System() });
+        items.Add(new[] { "npc_talk_shenyan", LlmPrompt.NpcTalkUser(st, "shenyan") });
+        items.Add(new[] { "npc_talk_zhoujin", LlmPrompt.NpcTalkUser(st, "zhoujin") });
+        items.Add(new[] { "micro", LlmPrompt.MicroUser(st) });
+        items.Add(new[] { "remark", LlmPrompt.RemarkUser(st, "关于追加市财政局专项业务经费的请示", "要求压减不可预见费后报", "财政局半小时后回电：“按市长要求压到5%。”") });
+        items.Add(new[] { "week_review", LlmPrompt.WeekReviewUser(st) });
+        items.Add(new[] { "ambience", LlmPrompt.AmbienceUser(st) });
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("[");
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (i > 0) sb.Append(",");
+            sb.Append("{\"id\":\"").Append(items[i][0]).Append("\",\"text\":\"")
+              .Append(Esc(items[i][1]))
+              .Append("\"}");
+        }
+        sb.Append("]");
+        try { System.IO.File.WriteAllText("prompts.json", sb.ToString(), System.Text.Encoding.UTF8); } catch { }
+        Console.WriteLine("已导出 " + items.Count + " 条真实提示词 → prompts.json");
+    }
+
+    /// <summary>JSON 字符串转义（自足小助手，避免手写转义链）。</summary>
+    static string Esc(string s)
+    {
+        if (s == null) return "";
+        var b = new System.Text.StringBuilder(s.Length + 16);
+        foreach (char c in s)
+        {
+            switch (c)
+            {
+                case '\\': b.Append("\\\\"); break;
+                case '"': b.Append("\\\""); break;
+                case '\n': b.Append("\\n"); break;
+                case '\r': break;
+                case '\t': b.Append("\\t"); break;
+                default: b.Append(c); break;
+            }
+        }
+        return b.ToString();
     }
 
     // ---------------- 内容体检 ----------------
