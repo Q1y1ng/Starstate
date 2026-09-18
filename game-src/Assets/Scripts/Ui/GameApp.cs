@@ -185,14 +185,14 @@ namespace Starstate.Ui
             {
                 new ChatMsg { role = "system", content = LlmPrompt.System() },
                 new ChatMsg { role = "user", content = "连通性测试。请只输出：{\"ok\":1}" },
-            }, 24,
-            ok => ui.ShowLlmStatus("✓ 连接成功，模型已响应。AI 增强可用。"),
-            err => ui.ShowLlmStatus("✗ " + err));
+            }, 24, ok: ok => ui.ShowLlmStatus("✓ 连接成功，模型已响应。AI 增强可用。"),
+            err: err => ui.ShowLlmStatus("✗ " + err), jsonSchema: LlmSchemas.Ping);
         }
 
-        private IEnumerator ChatOnce(ChatMsg[] msgs, int maxTokens, Action<string> ok, Action<string> err, Func<bool> cancelled = null)
+        private IEnumerator ChatOnce(ChatMsg[] msgs, int maxTokens, Action<string> ok, Action<string> err,
+            Func<bool> cancelled = null, string jsonSchema = null)
         {
-            yield return LlmClient.Chat(llm, msgs, maxTokens, ok, err, cancelled);
+            yield return LlmClient.Chat(llm, msgs, maxTokens, ok, err, cancelled, jsonSchema);
         }
 
         // ---------------- NPC 交谈 ----------------
@@ -269,7 +269,7 @@ namespace Starstate.Ui
             {
                 if (session != talkSession) return;
                 FinishTalk(ContentNpcTalk.FallbackTalk(st, npcId), "AI 未接入：" + e + "（使用内置台词）", session);
-            }, cancelled));
+            }, cancelled, jsonSchema: LlmSchemas.Talk));
         }
 
         private void FinishTalk(NpcTalkDto dto, string statusNote, int session)
@@ -352,7 +352,7 @@ namespace Starstate.Ui
                     RenderAll();
                 }
             },
-            e => { microBusy = false; }));
+            e => { microBusy = false; }, jsonSchema: LlmSchemas.Micro));
         }
 
         // ---------------- 菜单与主循环 ----------------

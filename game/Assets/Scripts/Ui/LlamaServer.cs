@@ -83,32 +83,48 @@ namespace Starstate.Ui
                 yield break;
             }
 
-            // ⑥ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告）——
+            // ⑥ 拉起：首选 D:\AI 标定配置（benchmark_2026-08-31 / quant_IQ4vsQ3 报告 + 2026-09-13 ngram-mod 实测）——
             //    9B 模型在本机（RTX 3060 6GB）标定值：-ngl 28 固定 + KV 双 q4_0 量化 + ub128 + fa on + t16 绑核；
+            //    再叠 ngram-mod 自投机（零显存成本，冷 +15%~+67%、重复请求最高 +121%）；
             //    失败才降档（显存极端不足时），保证总能跑起来。
             //    starting 必须在 Process.Start 之前置位，否则并发 EnsureRunning 会双开（内存打满事故）。
             string threads = " -t 16 --cpu-range 0-19 -ub 128 -fa on";
-            string[] labels = { "标定配置（ngl28·KV q4_0 量化）", "降档（ngl16·KV q8_0）", "纯CPU" };
-            int[] ngls = { 28, 16, 0 };
-            int baseCtx = Math.Max(1024, Math.Min(cfg.ctx, 65536));
+            var preset = LlmPresets.Find(cfg.preset);
+            string[] labels = { "标定配置", "降档（ngl16·KV q8_0）", "纯CPU" };
+            int[] ngls = { preset != null ? preset.ngl : 28, 16, 0 };
+            int baseCtx = Math.Max(1024, Math.Min(preset != null ? preset.ctx : cfg.ctx, 131072));
             int[] ctxs = { baseCtx, Math.Min(baseCtx, 32768), Math.Min(baseCtx, 16384) };
             string[] kvTypes = { "q4_0", "q8_0", "q8_0" };
+            string presetArgs = preset != null && !string.IsNullOrEmpty(preset.args) ? " " + preset.args.Trim() : "";
+            string lora = ResolveLora(cfg);
+
+            // 尝试序列：每档先试带自投机；服务端不认这几个参数（旧版 llama.cpp）会立即退出，
+            // 此时用同档不带自投机重试，并让后续档位都不再带（一次探测，不反复浪费启动时间）。
+            string specArgs = SpecArgs(cfg);
+            int[] tiers = { 0, 0, 1, 2 };
+            bool[] specTries = { true, false, false, false };
             var seen = new HashSet<string>();
 
             starting = true;
             startingSince = Time.realtimeSinceStartup;
-            for (int a = 0; a < labels.Length; a++)
+            for (int a = 0; a < tiers.Length; a++)
             {
+                int t = tiers[a];
+                bool useSpec = specTries[a] && specArgs.Length > 0;
                 string args = "-m \"" + gguf + "\" --host 127.0.0.1 --port " + cfg.port +
-                              " -c " + ctxs[a] + " -ngl " + ngls[a] +
-                              " -ctk " + kvTypes[a] + " -ctv " + kvTypes[a] +
-                              threads +
+                              " -c " + ctxs[t] + " -ngl " + ngls[t] +
+                              " -ctk " + kvTypes[t] + " -ctv " + kvTypes[t] +
+                              threads + presetArgs +
+                              (useSpec ? " " + specArgs : "") +
                               " --jinja --reasoning off";   // 关闭思维链：正文直接输出（--reasoning off 为 b10343 规范开关）
-                if (!string.IsNullOrEmpty(cfg.loraPath) && File.Exists(cfg.loraPath))
-                    args += " --lora \"" + cfg.loraPath + "\"";
+                if (!string.IsNullOrEmpty(lora))
+                    args += " --lora \"" + lora + "\"";
                 if (!seen.Add(args)) continue;
 
-                status("正在启动本地模型服务（" + labels[a] + "，上下文 " + ctxs[a] + "）…");
+                string label = (preset != null ? preset.label : labels[t])
+                             + (t > 0 ? "（降档）" : "")
+                             + (useSpec ? "·自投机" : (specArgs.Length > 0 ? "·无自投机" : ""));
+                status("正在启动本地模型服务（" + label + "，上下文 " + ctxs[t] + "）…");
                 try
                 {
                     var si = new System.Diagnostics.ProcessStartInfo
@@ -136,7 +152,7 @@ namespace Starstate.Ui
                 if (ok)
                 {
                     starting = false;
-                    status("本地模型已就绪（" + labels[a] + "）：" + Path.GetFileName(gguf));
+                    status("本地模型已就绪（" + label + "）：" + Path.GetFileName(gguf));
                     done(true);
                     yield break;
                 }
@@ -145,6 +161,14 @@ namespace Starstate.Ui
             starting = false;
             status("各档启动配置均失败，AI 增强暂不可用（游戏照常运行）。");
             done(false);
+        }
+
+        /// <summary>自投机解码启动参数；关闭时返回空串（空串=启动参数不带 --spec-*）。
+        /// 参数留空则用内置默认值——旧存档里没这个字段时也能享受提速。</summary>
+        private static string SpecArgs(LlmConfig cfg)
+        {
+            if (cfg == null || cfg.noSpec) return "";
+            return string.IsNullOrEmpty(cfg.specArgs) ? LlmConfig.DefaultSpecArgs : cfg.specArgs.Trim();
         }
 
         /// <summary>端口是否已被占用（被占则禁止再拉第二个实例）。</summary>
@@ -278,8 +302,37 @@ namespace Starstate.Ui
             return null;
         }
 
+        /// <summary>解析单个路径：文件直返，目录则取其中第一个 gguf。</summary>
+        private static string ResolvePath(string p)
+        {
+            try
+            {
+                if (File.Exists(p)) return p;
+                if (Directory.Exists(p))
+                    foreach (var f in Directory.GetFiles(p, "*.gguf")) return f;
+            }
+            catch { /* 路径非法等 */ }
+            return null;
+        }
+
+        /// <summary>解析要挂的 LoRA 路径（预设优先；空或文件不存在=不挂）。</summary>
+        private static string ResolveLora(LlmConfig cfg)
+        {
+            var preset = LlmPresets.Find(cfg != null ? cfg.preset : null);
+            string raw = preset != null ? preset.loraPath : (cfg != null ? cfg.loraPath : "");
+            if (string.IsNullOrEmpty(raw)) return null;
+            return File.Exists(raw) ? raw : null;
+        }
+
         private static string ResolveGguf(LlmConfig cfg)
         {
+            var preset = LlmPresets.Find(cfg != null ? cfg.preset : null);
+            if (preset != null && !string.IsNullOrEmpty(preset.modelPath))
+            {
+                string pm = ResolvePath(preset.modelPath);
+                if (pm != null) return pm;
+                // 预设模型不在（未下载/换机器）→ 回落到自定义路径，而不是直接失败
+            }
             string p = cfg.modelPath;
             if (string.IsNullOrEmpty(p)) return null;
             if (File.Exists(p)) return p;

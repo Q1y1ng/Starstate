@@ -21,6 +21,31 @@ namespace Starstate.Ui
         }
 
         [Serializable]
+        private class MsgList { public ChatMsg[] messages; }
+
+        /// <summary>
+        /// 带结构化输出的请求体（手写拼装：schema 是任意 JSON，JsonUtility 拼不了嵌套 schema）。
+        /// 用显式 json_schema 而不是 json_object —— 本机 b10343 对 json_object 不做约束（实测无效），
+        /// 带 schema 时 12/12 全过（流式 3/3），速度不变。
+        /// </summary>
+        private static string BuildJsonBody(string model, ChatMsg[] messages, float temperature, int maxTokens,
+            bool stream, string schema)
+        {
+            string msgs = JsonUtility.ToJson(new MsgList { messages = messages });
+            // 去掉 JsonUtility 的外层包裹，只留数组（恰好去一个尾部大括号，不用 TrimEnd——那会误伤内容里的 }）
+            const string prefix = "{\"messages\":";
+            if (msgs.StartsWith(prefix, StringComparison.Ordinal))
+                msgs = msgs.Substring(prefix.Length, msgs.Length - prefix.Length - 1);
+            return "{\"model\":\"" + model.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"," +
+                   "\"messages\":" + msgs + "," +
+                   "\"temperature\":" + temperature.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," +
+                   "\"max_tokens\":" + maxTokens + "," +
+                   "\"stream\":" + (stream ? "true" : "false") + "," +
+                   "\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{" +
+                   "\"name\":\"" + LlmSchemas.SchemaName + "\",\"strict\":true,\"schema\":" + schema + "}}}";
+        }
+
+        [Serializable]
         private class ChatResp
         {
             public ChoiceDto[] choices;
@@ -140,19 +165,22 @@ namespace Starstate.Ui
         }
 
         /// <summary>发起一次对话补全。ok 返回 message.content 原文；err 返回错误说明。
-        /// cancelled：可选取消谓词（如交谈弹层已关闭）——命中即中止请求，ok/err 均不回调。</summary>
+        /// cancelled：可选取消谓词（如交谈弹层已关闭）——命中即中止请求，ok/err 均不回调。
+        /// jsonSchema：需要模型产出**合法 JSON** 时传入 schema（LlmSchemas.*），否则 null。
+        ///       本机实测（2026-09-16）：不加约束时三个模型的 JSON 通过率只有 25%~67%，
+        ///       加 schema 后 12/12 全过且速度不变（json_object 无效，必须用完整 schema）——
+        ///       叙事游戏解析失败就静默回退静态台词，所以这是硬需求。</summary>
         public static IEnumerator Chat(LlmConfig cfg, ChatMsg[] messages, int maxTokens,
-            Action<string> ok, Action<string> err, Func<bool> cancelled = null)
+            Action<string> ok, Action<string> err, Func<bool> cancelled = null, string jsonSchema = null)
         {
-            var req = new ChatReq
-            {
-                model = string.IsNullOrEmpty(cfg.model) ? "local" : cfg.model,
-                messages = messages,
-                temperature = cfg.temperature,
-                max_tokens = maxTokens,
-                stream = false,
-            };
-            string body = JsonUtility.ToJson(req);
+            string modelName = string.IsNullOrEmpty(cfg.model) ? "local" : cfg.model;
+            string body = string.IsNullOrEmpty(jsonSchema)
+                ? JsonUtility.ToJson(new ChatReq
+                  {
+                      model = modelName, messages = messages, temperature = cfg.temperature,
+                      max_tokens = maxTokens, stream = false,
+                  })
+                : BuildJsonBody(modelName, messages, cfg.temperature, maxTokens, false, jsonSchema);
             using (var web = new UnityWebRequest(cfg.endpoint, "POST"))
             {
                 byte[] bytes = Encoding.UTF8.GetBytes(body);
@@ -192,17 +220,17 @@ namespace Starstate.Ui
         /// <summary>流式对话补全（SSE）。onDelta 每收到增量回调一次当前全文；完成后 ok(全文)。
         /// 服务端若忽略 stream 返回整包 JSON，会自动回退解析。cancelled 语义同 Chat。</summary>
         public static IEnumerator ChatStream(LlmConfig cfg, ChatMsg[] messages, int maxTokens,
-            Action<string> onDelta, Action<string> ok, Action<string> err, Func<bool> cancelled = null)
+            Action<string> onDelta, Action<string> ok, Action<string> err, Func<bool> cancelled = null,
+            string jsonSchema = null)
         {
-            var req = new ChatReq
-            {
-                model = string.IsNullOrEmpty(cfg.model) ? "local" : cfg.model,
-                messages = messages,
-                temperature = cfg.temperature,
-                max_tokens = maxTokens,
-                stream = true,
-            };
-            string body = JsonUtility.ToJson(req);
+            string modelName = string.IsNullOrEmpty(cfg.model) ? "local" : cfg.model;
+            string body = string.IsNullOrEmpty(jsonSchema)
+                ? JsonUtility.ToJson(new ChatReq
+                  {
+                      model = modelName, messages = messages, temperature = cfg.temperature,
+                      max_tokens = maxTokens, stream = true,
+                  })
+                : BuildJsonBody(modelName, messages, cfg.temperature, maxTokens, true, jsonSchema);
             using (var web = new UnityWebRequest(cfg.endpoint, "POST"))
             {
                 byte[] bytes = Encoding.UTF8.GetBytes(body);

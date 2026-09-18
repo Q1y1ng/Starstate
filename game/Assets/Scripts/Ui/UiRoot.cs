@@ -66,7 +66,7 @@ namespace Starstate.Ui
 
         // AI 接入（设置页控件）
         private LlmConfig llmCfg;
-        private Button llmEnableBtn, llmLocalBtn, llmRemoteBtn, llmAutoBtn;
+        private Button llmEnableBtn, llmLocalBtn, llmRemoteBtn, llmAutoBtn, llmSpecBtn, llmPresetBtn;
         private InputField llmEndpoint, llmKey, llmModel, llmServer, llmModelPath, llmLora, llmCtx;
         private Text llmStatus;
 
@@ -1366,6 +1366,14 @@ namespace Starstate.Ui
             llmAutoBtn.GetComponent<LayoutElement>().preferredWidth = 240;
             llmAutoBtn.GetComponent<LayoutElement>().preferredHeight = 32;
             llmAutoBtn.onClick.AddListener(ToggleLlmAuto);
+            llmSpecBtn = MakeButton(autoRow.transform, "自投机解码：关", 12, false);
+            llmSpecBtn.GetComponent<LayoutElement>().preferredWidth = 240;
+            llmSpecBtn.GetComponent<LayoutElement>().preferredHeight = 32;
+            llmSpecBtn.onClick.AddListener(ToggleLlmSpec);
+            llmPresetBtn = MakeButton(autoRow.transform, "模型预设：切换", 12, false);
+            llmPresetBtn.GetComponent<LayoutElement>().preferredWidth = 300;
+            llmPresetBtn.GetComponent<LayoutElement>().preferredHeight = 32;
+            llmPresetBtn.onClick.AddListener(CycleLlmPreset);
             llmCtx = MakeLlmRowInput(autoRow.transform, "上下文 tokens（默认 16384）",
                 v =>
                 {
@@ -1559,6 +1567,17 @@ namespace Starstate.Ui
                 BtnLabel(llmAutoBtn, llmCfg.autoStart ? "启动时自动加载：开" : "启动时自动加载：关");
                 SetBtnColor(llmAutoBtn, llmCfg.autoStart ? FromHex(Accent) : FromHex(TabIdle));
             }
+            if (llmSpecBtn != null)
+            {
+                BtnLabel(llmSpecBtn, llmCfg.noSpec ? "自投机解码：关" : "自投机解码：开");
+                SetBtnColor(llmSpecBtn, llmCfg.noSpec ? FromHex(TabIdle) : FromHex(Accent));
+            }
+            if (llmPresetBtn != null)
+            {
+                var p = LlmPresets.Find(llmCfg.preset);
+                BtnLabel(llmPresetBtn, p != null ? ("模型：" + p.label) : "模型：自定义（点此切换）");
+                SetBtnColor(llmPresetBtn, p != null ? FromHex(Accent) : FromHex(TabIdle));
+            }
         }
 
         private void ToggleLlm()
@@ -1574,6 +1593,43 @@ namespace Starstate.Ui
             if (llmCfg == null) return;
             llmCfg.autoStart = !llmCfg.autoStart;
             RefreshLlmWidgets();
+            if (OnLlmApplied != null) OnLlmApplied();
+        }
+
+        /// <summary>自投机解码（ngram-mod）开关：本机 b10343 实测零显存成本提速；改动在下次拉起服务时生效。</summary>
+        private void ToggleLlmSpec()
+        {
+            if (llmCfg == null) return;
+            llmCfg.noSpec = !llmCfg.noSpec;
+            RefreshLlmWidgets();
+            if (llmStatus != null)
+                llmStatus.text = !llmCfg.noSpec
+                    ? "已开启自投机解码（ngram-mod）：下次启动服务时生效；旧版 llama-server 不认该参数时会自动去掉重试。"
+                    : "已关闭自投机解码：改用原始解码（速度可能降低）。";
+            if (OnLlmApplied != null) OnLlmApplied();
+        }
+
+        /// <summary>循环切换模型预设（自定义 → 三个标定预设）。切换会先停掉本进程拉起的服务，
+        /// 否则下次连接会「检测到已有服务」而继续用旧模型（这是本游戏最容易踩的坑）。</summary>
+        private void CycleLlmPreset()
+        {
+            if (llmCfg == null) return;
+            string[] order = { "", LlmPresets.Qwen4B, LlmPresets.Gemma4B, LlmPresets.Ornith9B };
+            int at = Array.IndexOf(order, llmCfg.preset ?? "");
+            llmCfg.preset = order[(at + 1 + order.Length) % order.Length];
+            var p = LlmPresets.Find(llmCfg.preset);
+            if (p != null)
+            {
+                llmCfg.modelPath = p.modelPath;
+                llmCfg.loraPath = p.loraPath;
+                llmCfg.ctx = p.ctx;
+            }
+            LlamaServer.Kill();   // 停掉旧实例，避免沿用旧模型
+            RefreshLlmWidgets();
+            if (llmStatus != null)
+                llmStatus.text = p == null
+                    ? "已切换为自定义模型：完全按下面填写的路径与上下文启动。"
+                    : "已切换预设：" + p.label + "（旧服务已停止，下次连接按新预设启动）\n" + p.note;
             if (OnLlmApplied != null) OnLlmApplied();
         }
 

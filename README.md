@@ -31,11 +31,23 @@ Starstate 是一款社会人生模拟游戏：玩家通过一个具体的人，�
 
 游戏可在 NPC 交谈、日常"小插曲"、**科长周评**上接入大模型，**架构上保证不影响可玩性**：AI 只产文本与情绪分类，所有数值效果走白名单；关闭/失败自动回退内置内容。
 
-- **本地模式（默认）**：首次交谈/「测试连接」时唤醒 `llama-server`（OpenAI 兼容；`autoStart` 默认为 **false**，即不随游戏启动抢占显存），默认模型 `Ornith-1.5-9B-Heretic-Q4_K_M` ＋ RP-LoRA（游戏叙事用的本地模型，与 Agent 调用的 `Ornith-1.5-9B-uncensored-IQ4_XS` 是两套资产；可在设置中更换/留空）；启动参数按 `D:\AI` 标定报告执行（`-ngl 28` 固定＋KV 双 q4_0 量化＋`-ub 128 -fa on -t 16 --cpu-range 0-19`），显存极端不足时自动降档；
+- **本地模式（默认）**：首次交谈/「测试连接」时唤醒 `llama-server`（OpenAI 兼容；`autoStart` 默认为 **false**，即不随游戏启动抢占显存）；默认按**模型预设**启动（见下），显存极端不足时自动降档（ngl16/q8_0 → 纯 CPU）；
+- **模型预设（2026-09-16 三模型横评后接入）**：设置页「模型」按钮一键循环切换，切换会先停掉旧服务（否则下一次连接会「检测到已有服务」而继续用旧模型）：
+
+| 预设 | 模型 | 实测速度 | 特点 |
+| --- | --- | --- | --- |
+| **4B·Qwen3.5 Deckard（默认）** | Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking（2.5GB） | **44~51 t/s** | 消融+RP 同一份权重，不需 LoRA；省内存可与浏览器共存 |
+| 4B·Gemma-4 E4B | gemma-4-E4B-it-uncensored（4.97GB） | 31~40 t/s | 中文机关腔最好的一档；另有原生多模态（游戏未用） |
+| 9B·Ornith-Heretic + RP-LoRA | Ornith-1.5-9B-Heretic + RP-LoRA（5.3GB） | 16.5 t/s | 台词最鲜活；但在 16GB 机器上与浏览器共存易换页降速 |
+
+  横评方法：用游戏**真实提示词**（`LlmPrompt.*`，由 `tools/core-probe.sh prompts` 导出）跑 3 个 JSON 用例 × 4 次 + 6 个文本用例，同机同时段对比。结论：**4B 档在速度上快 2.7 倍、JSON 遵从度略优、内存占用减半**；9B 的台词更锋利，作为「文风优先」备选保留。
+- **结构化输出（同批接入，收益最大）**：交谈与小插曲请求带 `response_format.json_schema`（`LlmSchemas.Talk/Micro`）。实测不加约束时三个模型各自的**合法 JSON 通过率只有 25%~67%**（解析失败＝静默回退静态台词）；加约束后 **12/12 全过，流式 3/3，速度不变**。⚠️ 本机 llama.cpp b10343 对 `{"type":"json_object"}` **不做约束**（写了等于没写），必须给完整 schema。
+- **自投机解码（`ngram-mod`，2026-09-13 接入）**：启动参数默认附带 `--spec-type ngram-mod --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 48 --spec-ngram-mod-n-max 64`（不加载草稿模型，零额外显存）。**旧版 llama-server 不认这几个参数会自动去掉重试**，因此在任何机器上都起得来。可在「设置 → AI 增强」一键开关。
+  > 实测记录（本机 RTX 3060 6GB，用游戏自己的模型＋LoRA、逐字照抄启动参数跑游戏式负载——固定 system 提示＋反复相似 NPC 交谈）：**本游戏的负载下测不出收益**（交替 A/B 三轮：基线中位 20.8 t/s vs 自投机中位 20.0 t/s，而同配置跑两次就能差 25%；三轮服务端日志里 `draft` 打印次数均为 0——短而各异的对话凑不出可复用的 ngram 片段）。`D:\AI` 报告里的 +62%~+121% 属于「代码/重构/重复文本」场景。故本开关**保留但不当作提速手段**：只在长会话里反复生成同类文本时可能偶有收益。
 - **外部 API 模式**：任何 OpenAI 兼容 `…/v1/chat/completions` 端点＋密钥；
 - **AI 周评**：周五例会结算后，AI 以科长口吻生成一句引用本周真实计划与事件的评语，追加在点评页（【纯文本】协议，失败静默）；
 - **设置页**：总开关、模式切换、地址/密钥/模型名/路径/LoRA、测试连接、音效开关；顶栏徽标实时显示 AI 状态；
-- 本机实测（RTX 3060 Laptop 6GB）：交谈生成约 13—18 秒/次；三模型横评与选型结论见 [changelog/PHASE-3.md](changelog/PHASE-3.md) 附录。
+- 本机实测（RTX 3060 Laptop 6GB）：默认 4B 预设下交谈生成约 **5—7 秒/次**（旧 9B+LoRA 约 13—18 秒/次）；历史横评见 [changelog/PHASE-3.md](changelog/PHASE-3.md) 附录，本轮 4B 横评见 [changelog/PHASE-5.md](changelog/PHASE-5.md) v0.3.0。
 
 ## 快速开始
 

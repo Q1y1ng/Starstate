@@ -130,11 +130,15 @@ Play 手测金路径：新局→序章三幕→周计划→第一周卷宗（摊
 10. HorizontalLayoutGroup 的 childControl 必须 true。
 11. Tween/延迟回调入口判空。
 12. `requireMarks` 数组 AND；OR 要拆事件。
-13. Effects **无** compliance/efficiency 字段——两把尺只走 DossierOption。
+13. `Effects` **已有** `compliance`/`efficiency`/`risk` 字段（M1 起）：剧情链可推动两把尺与风险账本；卷宗签批走 `DossierOption.complianceDelta`，两套并存。
 
 ### LLM
-14. **严禁双 llama-server**（16GB 会卡死）。
+14. **严禁双 llama-server**（16GB 会卡死）；游戏会自动检测端口/已有进程，只等待不重拉。
 15. 失败静默回退内置内容。
+16. **结构化输出**：凡是游戏要**解析**的 AI 返回（交谈 `Talk`、小插曲 `Micro`）必须带 `response_format.json_schema`（`LlmSchemas.*`）。实测不带约束时合法 JSON 只有 25%~67%，带上后 100%（流式同样有效）；`{"type":"json_object"}` 在本机 b10343 上**无效**（不约束），只能用完整 schema。改 schema 时字段名必须与 `LlmJson.ParseTalk/ParseMicro` 的读取键一致，`LlmSchemas.Validate()` 与 `LlmPresetTest` 会拦住笔误。
+17. **模型预设**（`LlmPresets.All`）：4B-Qwen（默认）/ 4B-Gemma / 9B-Ornith+LoRA。切换预设必须先 `LlamaServer.Kill()`，否则下次连接检测到端口已有服务就继续沿用旧模型（本游戏最容易踩的坑）。预设里的模型文件不存在时会回落到设置里的自定义路径。
+18. **启动参数**：`-ngl 28 -c 16384 -ctk/-ctv q4_0 -ub 128 -fa on -t 16 --cpu-range 0-19 --jinja --reasoning off` ＋可选 `--lora`（RP-LoRA）＋可选 ngram-mod 自投机；失败时自动降档（ngl16/q8_0 → 纯 CPU），并按同档去自投机重试（兼容不认 `--spec-*` 的旧版 llama-server）。
+19. **自投机（`ngram-mod`）在本游戏负载下无收益**（2026-09-13 交替 A/B 实测：三轮服务端 `draft` 打印次数均为 0，计时差异全在噪声内）——它是「代码/重复文本」场景的优化，保留开关供作者切换，不要把它当提速手段写进发布说明。
 
 ## 7. 下一刀
 

@@ -19,10 +19,23 @@ namespace Starstate.Core
         public string apiKey = "";
         public string model = "local";           // llama-server 忽略模型名，外部 API 填真实名
         public string serverExe = "D:/AI/llama.cpp/llama-server.exe";
-        public string modelPath = "D:/AI/models/Ornith-1.5-9B-Heretic-Q4_K_M/Ornith-1.5-9B-Uncensored-Q4_K_M.gguf";
-        public string loraPath = "D:/AI/models/Qwen3.5-9B-NSFW-RP-LoRA/NSFW-RP-RolePlay.qwen3.5-9b.q8_0.gguf"; // 默认挂载 RP-LoRA（作者选定：对话最鲜活）
+        // 默认模型：本机 2026-09-15 新增的 4B 级「消融+RP 同权重」件——比 9B+LoRA 快 2.7 倍（44~51 t/s vs 16.5）、
+        // 只需 2.5GB 显存/内存（可与浏览器/编辑器共存，避开本机 16GB 换页降速），且不需要另挂 LoRA。
+        public string modelPath = "D:/AI/models/Qwen3.5-4B-Deckard-HERETIC/Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking.i1-Q4_K_M.gguf";
+        public string loraPath = "";   // 默认不挂：4B Deckard 已内置 RP 微调；Ornith-9B 预设才需要 RP-LoRA
+        public string preset = "qwen35-4b";   // 模型预设 id（空=自定义，完全按上面三项+ctx 走）
         public int port = 8817;
-        public int ctx = 16384;                  // 16K：单次短 prompt 足够；64K 会令启动占满内存/显存
+        public int ctx = 32768;                  // 32K：游戏的提示词才几百字，32K 够长线对话；4B 模型 KV 小，显存无压力
+        // ngram-mod 自投机解码（2026-09-13 本机实测：冷 +15%~+67%、重复请求最高 +121%，零额外显存）
+        // 原理：不加载草稿模型，用跨请求共享的 ngram 哈希池在历史文本里找重复片段当草稿，
+        //       目标模型批量验证——游戏里 system 提示词与相似句式反复出现，正是它的甜点。
+        // 旧版 llama.cpp 不认这几个参数会在启动时直接退出，LlamaServer 会自动去掉它们重试。
+        // ⚠️ 用**否定式** noSpec：JsonUtility 反序列化旧存档时缺字段只能给默认值，
+        //    若写成 `spec` 就会因缺字段而静默关掉提速；写成 noSpec 则缺失=false=启用。
+        public bool noSpec;                      // true = 关闭自投机
+        public string specArgs = "";            // 空 = 用内置默认参数（LlamaConfig 里的 DefaultSpecArgs）
+        public const string DefaultSpecArgs =
+            "--spec-type ngram-mod --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 48 --spec-ngram-mod-n-max 64";
         public float temperature = 0.9f;
         public bool autoStart = false;           // 默认不启动即加载；首次交谈/测试连接时再唤醒
     }
@@ -32,6 +45,125 @@ namespace Starstate.Core
     {
         public string role;
         public string content;
+    }
+
+    /// <summary>
+    /// 模型预设：本机（RTX 3060 6GB）已标定的几套“模型 + 启动参数”组合。
+    /// 为什么要预设：不同模型的 ngl / 上下文 / 是否挂 LoRA 完全不同，写在启动器里就没法切了。
+    /// 数值来自 `D:\AI\bat\32_*` `33_*` `30_*` 的实测标定与本项目的横向评测（2026-09-16）。
+    /// </summary>
+    [Serializable]
+    public class LlmPreset
+    {
+        public string id = "";
+        public string label = "";        // 设置面板显示名
+        public string modelPath = "";
+        public string loraPath = "";
+        public int ctx = 32768;
+        public int ngl = 99;
+        public string args = "";          // 附加启动参数（预重为默认值）
+        public string note = "";          // 速度/文风取舍提示
+    }
+
+    public static class LlmPresets
+    {
+        public const string Qwen4B = "qwen35-4b";
+        public const string Gemma4B = "gemma4-e4b";
+        public const string Ornith9B = "ornith-9b";
+
+        public static readonly LlmPreset[] All =
+        {
+            new LlmPreset
+            {
+                id = Qwen4B, label = "4B·Qwen3.5 Deckard（速度优先）",
+                modelPath = "D:/AI/models/Qwen3.5-4B-Deckard-HERETIC/Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking.i1-Q4_K_M.gguf",
+                loraPath = "", ctx = 32768, ngl = 99,
+                note = "实测 44~51 t/s（现役 9B 的 2.7 倍），2.5GB 可与其他软件共存；消融+RP 同一份权重，不需 LoRA；文风偏简洁",
+            },
+            new LlmPreset
+            {
+                id = Gemma4B, label = "4B·Gemma-4 E4B（折中）",
+                modelPath = "D:/AI/models/Gemma-4-E4B-it-uncensored/gemma-4-E4B-it-uncensored-Q4_K_M.gguf",
+                loraPath = "", ctx = 32768, ngl = 42,
+                note = "实测 31~40 t/s，4.97GB；中文机关腔最好的一档，另有原生多模态（游戏未用）",
+            },
+            new LlmPreset
+            {
+                id = Ornith9B, label = "9B·Ornith-Heretic + RP-LoRA（文风优先）",
+                modelPath = "D:/AI/models/Ornith-1.5-9B-Heretic-Q4_K_M/Ornith-1.5-9B-Uncensored-Q4_K_M.gguf",
+                loraPath = "D:/AI/models/Qwen3.5-9B-NSFW-RP-LoRA/NSFW-RP-RolePlay.qwen3.5-9b.q8_0.gguf",
+                ctx = 16384, ngl = 28,
+                note = "实测 16.5 t/s，台词最鲜活（RP-LoRA）；但 5.3GB 在 16GB 机器上与浏览器共存易换页降速",
+            },
+        };
+
+        public static LlmPreset Find(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            foreach (var p in All) if (p.id == id) return p;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 结构化输出 schema（OpenAI 兼容的 response_format.json_schema）。
+    ///
+    /// 为什么必须用**完整 schema** 而不是 `{"type":"json_object"}`：
+    /// 本机 llama.cpp b10343 对 json_object **不做约束**（实测与不加时一样 58~67% 通过），
+    /// 而带 schema（可转 GBNF）时 **12/12 全过、流式也 3/3**，速度不变。
+    /// 字段名必须与 LlmJson.ParseTalk / ParseMicro 读的键一致，改这里请同步改解析器。
+    /// </summary>
+    public static class LlmSchemas
+    {
+        public const string Talk =
+            "{\"type\":\"object\",\"properties\":{" +
+            "\"greeting\":{\"type\":\"string\"}," +
+            "\"lines\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," +
+            "\"options\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" +
+            "\"label\":{\"type\":\"string\"},\"mood\":{\"type\":\"string\"},\"reply\":{\"type\":\"string\"}}," +
+            "\"required\":[\"label\",\"mood\",\"reply\"]}}}," +
+            "\"required\":[\"greeting\",\"lines\",\"options\"]}";
+
+        public const string Micro =
+            "{\"type\":\"object\",\"properties\":{" +
+            "\"title\":{\"type\":\"string\"}," +
+            "\"paras\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}," +
+            "\"options\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{" +
+            "\"label\":{\"type\":\"string\"},\"mood\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"}}," +
+            "\"required\":[\"label\",\"mood\",\"result\"]}}}," +
+            "\"required\":[\"title\",\"paras\",\"options\"]}";
+
+        /// <summary>连通性测试用：只要求一个整数字段。</summary>
+        public const string Ping =
+            "{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"integer\"}},\"required\":[\"ok\"]}";
+
+        public const string SchemaName = "starstate";
+
+        /// <summary>
+        /// 自检：schema 是手写拼出来的字符串，很容易在改动时漏括号/错字段名——
+        /// 这里用内置迷你 JSON 解析器验一遍（字段名必须与 LlmJson 的读取键一致）。
+        /// </summary>
+        public static bool Validate(out string error)
+        {
+            error = "";
+            var checks = new[]
+            {
+                new object[] { "Talk", Talk, new[] { "greeting", "lines", "options" } },
+                new object[] { "Micro", Micro, new[] { "title", "paras", "options" } },
+                new object[] { "Ping", Ping, new[] { "ok" } },
+            };
+            foreach (var c in checks)
+            {
+                string name = (string)c[0];
+                var obj = MiniJson.Parse((string)c[1]) as Dictionary<string, object>;
+                if (obj == null) { error = name + " 不是合法 JSON 对象"; return false; }
+                var props = obj.ContainsKey("properties") ? obj["properties"] as Dictionary<string, object> : null;
+                if (props == null) { error = name + " 缺少 properties"; return false; }
+                foreach (var k in (string[])c[2])
+                    if (!props.ContainsKey(k)) { error = name + " 缺少字段 " + k; return false; }
+            }
+            return true;
+        }
     }
 
     // ---------------- LLM 输出 DTO（JsonUtility 友好） ----------------

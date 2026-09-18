@@ -2,7 +2,23 @@
 
 > 规格：[docs/compose/spec/papers-desk-overhaul.md](../docs/compose/spec/papers-desk-overhaul.md)  
 > 起点：七品·大同市市长（41 岁，最快合规轨），2026-09  
-> **当前版本：STARSTATE v0.2.9 Preview** · EditMode **95/95** · 存档 saveVersion **5** · main `4491a87`
+> **当前版本：STARSTATE v0.3.0 Preview** · EditMode **101/101** · 存档 saveVersion **5** · main `697f22d`
+
+## v0.3.0（2026-09-16）· 本地模型换代：4B 预设 + 结构化输出
+
+> 背景：本机 `D:\AI` 新增一批 4B 级模型（Qwen3.5-4B-Deckard-HERETIC、Gemma-4-E4B-it-uncensored 等）。
+> 用**游戏真实提示词**做了三模型横评，并把结论落进启动配置。
+
+| 轴 | 内容 |
+| --- | --- |
+| **横评方法** | `tools/core-probe.sh prompts` 从 Core 直接导出 `LlmPrompt.*` 的**真实提示词**（system + 2 个 NPC 交谈 + 小插曲 + 批示 + 周评 + 氛围），喂给各候选模型，统计合法 JSON 通过率与解码速度；同机同时段、逐字照抄游戏启动参数。 |
+| **结论** | 4B-Qwen3.5-Deckard **44~51 t/s**（现役 9B+LoRA 的 **2.7 倍**）、2.5GB 可与浏览器共存、消融+RP 同一份权重不需 LoRA；Gemma-4-E4B 31~40 t/s、中文机关腔最好；9B+LoRA 16.5 t/s 台词最锋利但占 5.3GB。**默认改为 4B 预设**，另两档保留为可选。 |
+| **结构化输出（本轮最大收益）** | 不加约束时三个模型的合法 JSON 通过率只有 **25%~67%**——也就是说游戏 AI 层有三分之一在**静默回退静态台词**。改用 `response_format.json_schema`（`LlmSchemas.Talk/Micro`）后 **12/12 全过、流式 3/3、速度不变**。⚠️ 关键发现：本机 llama.cpp b10343 对 `{"type":"json_object"}` **不做约束**（实测与不加一样），必须给完整 schema。 |
+| **预设机制** | `LlmPresets`（4B-Qwen / 4B-Gemma / 9B-Ornith+LoRA）：各自带模型路径、ctx、ngl、是否挂 LoRA。设置页「模型」按钮一键循环，切换会先 kill 旧服务（否则端口已有服务会被沿用）。预设模型缺失时回落到自定义路径。 |
+| **测试** | 新增 `Tests/LlmPresetTest.cs` 6 条（预设表自检 / 按 id 查找 / 默认指向最快档 / 只有 9B 挂 LoRA / schema 合法性与字段名对齐解析器）；**101 Passed / 0 Failed**。 |
+| **踩坑记录** | 评测过程中机器曾进入**换页**状态（同一 4B 模型 44 t/s → 4.6 t/s 并崩溃），导致一轮测试数据作废——已把「预热测速门禁（<15 t/s 即判定换页、作废）」写进评测流程。 |
+
+ · EditMode **95/95** · 存档 saveVersion **5** · main `4491a87`
 
 ## v0.2.9（2026-09-12）· M2 内容量与 M3 收口
 
